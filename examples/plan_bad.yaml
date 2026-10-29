@@ -1,0 +1,15 @@
+# Deliberately broken: no review, AC-3 untested, payments code without security review.
+objective: Add idempotent POST /transfers
+acceptance_criteria:
+  AC-1: A repeated Idempotency-Key never double-posts
+  AC-2: Amounts are Decimal, never float
+  AC-3: Overdrafts are rejected with 422
+nodes:
+  - {id: write_tests, kind: test, assignee: test_engineer, covers: [AC-1, AC-2]}
+  - {id: implement_transfer, kind: implement, assignee: payments_developer}
+  - {id: gates, kind: gate, gates: [pytest, ruff, policy]}
+  - {id: approve, kind: approval}
+edges:
+  - [write_tests, implement_transfer]
+  - [implement_transfer, gates, verifies]
+  - [implement_transfer, approve]

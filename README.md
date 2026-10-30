@@ -20,6 +20,9 @@ uv run orch plan-check examples/plan_transfers.yaml   # clears
 uv run orch plan-check examples/plan_bad.yaml         # rejected, with node-level errors
 ```
 
+Everything orch creates (databases, spike results, agent transcripts) goes in one folder,
+`.orch/` (gitignored; override with `ORCH_DATA_DIR`). Delete it any time with `uv run orch nuke` (or one part: `orch nuke db`, `orch nuke spike`).
+
 ## Layout
 
 ```
@@ -28,6 +31,8 @@ src/orch/
   core/          state machine, team registry, plan validator, event log, orchestrator
   policies/      policy packs (fintech_sdlc: SOD, GATE, COV, APR, PAY rules)
   db/            SQLAlchemy models (12 tables) + SQLite session
+  runtime/       Meta Model API wiring, the PM's tools, the PM spike
+  paths.py       the one data folder (.orch/)
 teams/           the agent team (YAML)
 examples/        sample plans
 ```

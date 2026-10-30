@@ -105,6 +105,7 @@ class Task(Base):
     objective: Mapped[str] = mapped_column(default="")
     acceptance_criteria: Mapped[dict[str, str] | None]  # root task only
     gates: Mapped[list[str]] = mapped_column(default=list)  # gate tasks only: which checks to run
+    paths: Mapped[list[str]] = mapped_column(default=list)  # test/implement: what it may write
     assignee: Mapped[str | None]  # agent name; None for gate/approval tasks
 
     # state

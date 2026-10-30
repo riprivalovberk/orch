@@ -2,6 +2,7 @@
 
 SOD  segregation of duties     GATE  deterministic checks     COV  test coverage
 APR  human approval            PAY   payments code needs a security review
+SCOPE  every test/implement node says what it writes, and its assignee may write it
 """
 
 from __future__ import annotations
@@ -9,13 +10,14 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from orch.core.plan import PlanGraph, Rule, ValidationContext, err
-from orch.core.scope import protected_grants
+from orch.core.scope import can_write, protected_grants, touches
 from orch.domain.enums import REVIEW_KINDS, GateName, TaskKind
 from orch.domain.schemas import PlanError
 
 REQUIRED_GATES = frozenset({GateName.PYTEST, GateName.RUFF, GateName.POLICY})
 SENSITIVE_DIRS = frozenset({"payments"})
 BUILD_KINDS = frozenset({TaskKind.IMPLEMENT, TaskKind.TEST, *REVIEW_KINDS})
+WRITING_KINDS = (TaskKind.TEST, TaskKind.IMPLEMENT)
 
 
 def sod_001_independent_review(g: PlanGraph, ctx: ValidationContext) -> Iterable[PlanError]:
@@ -127,29 +129,77 @@ def apr_001_single_approval(g: PlanGraph, ctx: ValidationContext) -> Iterable[Pl
             )
 
 
+def scope_001_paths(g: PlanGraph, ctx: ValidationContext) -> Iterable[PlanError]:
+    """Test and implement nodes list the paths they write, inside the assignee's write_paths.
+
+    Without this, PAY-001 could only guess from the assignee, and a PM could dodge it by
+    giving payments work to an agent that can't write payments code.
+    """
+    for n in g.nodes.values():
+        if n.kind not in WRITING_KINDS:
+            if n.paths:
+                yield err("SCOPE-001", n.id, "only test and implement nodes take paths")
+            continue
+        card = ctx.agents.get(n.assignee or "")
+        if card is None:  # STR-003 reports it
+            continue
+        if not n.paths:
+            yield err(
+                "SCOPE-001",
+                n.id,
+                f"{n.id} does not say which files it writes",
+                f"set paths to the files or globs it will write, within {card.name}'s "
+                f"write_paths {list(card.write_paths)}",
+            )
+        for path in n.paths:
+            if can_write(card.write_paths, path, SENSITIVE_DIRS):
+                continue
+            able = [
+                a
+                for a in ctx.agents_with(n.kind)
+                if can_write(ctx.agents[a].write_paths, path, SENSITIVE_DIRS)
+            ]
+            protected = sorted(touches([path], SENSITIVE_DIRS))
+            why = (
+                f" ({protected[0]}/ is only writable by agents whose scope names it)"
+                if (protected)
+                else ""
+            )
+            yield err(
+                "SCOPE-001",
+                n.id,
+                f"{card.name} cannot write {path}{why}",
+                f"assign {n.id} to {' or '.join(able)}"
+                if able
+                else f"no agent with {n.kind} can write {path}; change the path",
+            )
+
+
 def pay_001_security_review(g: PlanGraph, ctx: ValidationContext) -> Iterable[PlanError]:
-    """Work by an agent allowed to write payments/ code needs a security review."""
-    for impl in g.of_kind(TaskKind.IMPLEMENT):
-        card = ctx.agents.get(impl.assignee or "")
-        hits = sorted(protected_grants(card.write_paths, SENSITIVE_DIRS)) if card else []
-        if not hits:
+    """Work that writes payments/ code needs a security review, whoever is assigned."""
+    for n in g.of_kind(*WRITING_KINDS):
+        card = ctx.agents.get(n.assignee or "")
+        if hits := sorted(touches(n.paths, SENSITIVE_DIRS)):
+            what = f"{n.id} writes {hits[0]}/ code"
+        elif card and (hits := sorted(protected_grants(card.write_paths, SENSITIVE_DIRS))):
+            what = f"{n.id} is assigned to {n.assignee}, who can write {hits[0]}/ code"
+        else:
             continue
-        if any(v.kind == TaskKind.SECURITY_REVIEW for v in g.verifiers_of(impl.id)):
+        if any(v.kind == TaskKind.SECURITY_REVIEW for v in g.verifiers_of(n.id)):
             continue
-        what = f"{impl.id} is assigned to {impl.assignee}, who can write {hits[0]}/ code"
-        specialists = [a for a in ctx.agents_with(TaskKind.SECURITY_REVIEW) if a != impl.assignee]
+        specialists = [a for a in ctx.agents_with(TaskKind.SECURITY_REVIEW) if a != n.assignee]
         if specialists:
             yield err(
                 "PAY-001",
-                impl.id,
+                n.id,
                 f"{what}, so it needs a security review",
                 f"add a security_review node assigned to {specialists[0]} with a verifies "
-                f"edge from {impl.id}",
+                f"edge from {n.id}",
             )
         else:
             yield err(
                 "PAY-001",
-                impl.id,
+                n.id,
                 f"{what}, which requires a security review, but no agent in the team has "
                 "the security_review capability",
                 "a human must add a security reviewer to the team file; re-planning cannot "
@@ -164,5 +214,6 @@ RULES: tuple[Rule, ...] = (
     gate_001_required_gates,
     cov_001_criteria_tested,
     apr_001_single_approval,
+    scope_001_paths,
     pay_001_security_review,
 )

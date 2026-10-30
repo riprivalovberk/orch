@@ -222,7 +222,8 @@ def test_missing_specialist_escalates_to_human(orch, team, good_plan):
     pid, root = setup(orch, team)
     start(orch, root)
     p = good_plan.model_copy(deep=True)
-    next(n for n in p.nodes if n.id == "implement_transfer").assignee = "payments_developer"
+    impl = next(n for n in p.nodes if n.id == "implement_transfer")
+    impl.assignee, impl.paths = "payments_developer", ["minibank/payments/transfers.py"]
     result = orch.submit_plan(root, p)
     assert result.escalated and not result.valid
     assert st(orch, root) == S.AWAITING_HUMAN
@@ -234,7 +235,8 @@ def test_adding_an_agent_lets_the_plan_clear(orch, team, team_with_security, goo
     pid, root = setup(orch, team)
     start(orch, root)
     p = good_plan.model_copy(deep=True)
-    next(n for n in p.nodes if n.id == "implement_transfer").assignee = "payments_developer"
+    impl = next(n for n in p.nodes if n.id == "implement_transfer")
+    impl.assignee, impl.paths = "payments_developer", ["minibank/payments/transfers.py"]
     orch.submit_plan(root, p)
     [req] = orch.open_human_requests(pid)
 
@@ -283,3 +285,9 @@ def test_json_columns_round_trip_as_models(orch, team, good_plan):
         rec = s.query(PlanRecord).one()
         assert isinstance(rec.spec, Plan) and rec.spec.nodes[0].id == "write_tests"
         assert rec.errors and isinstance(rec.errors[0], PlanError)
+
+
+def test_planned_tasks_keep_their_paths(orch, team, good_plan):
+    _, _, ids = planned(orch, team, good_plan)
+    assert orch.get_task(ids["implement_transfer"])["paths"] == ["minibank/api/transfers.py"]
+    assert orch.get_task(ids["gates"])["paths"] == []

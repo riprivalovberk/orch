@@ -128,6 +128,17 @@ class PlanNode(BaseModel):
     assignee: str | None = None
     covers: list[str] = Field(default_factory=list)  # acceptance criterion ids
     gates: list[GateName] = Field(default_factory=list)  # gate nodes only
+    # test/implement nodes: repo files or globs this node will write. Checked against the
+    # assignee's write_paths at plan time; write_file only allows paths matching both.
+    paths: list[str] = Field(default_factory=list)
+
+    @field_validator("paths")
+    @classmethod
+    def _relative_paths(cls, v: list[str]) -> list[str]:
+        bad = [p for p in v if not is_safe_relative(p)]
+        if bad:
+            raise ValueError(f"paths must be repo-relative without '..': {bad}")
+        return v
 
 
 class PlanEdge(BaseModel):

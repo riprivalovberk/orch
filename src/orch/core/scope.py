@@ -31,3 +31,16 @@ def can_write(write_paths: Iterable[str], path: str, protected: frozenset[str]) 
         return False
     hit = protected & set(PurePosixPath(path).parts[:-1])
     return not hit or hit <= protected_grants(granted, protected)
+
+
+def task_can_write(
+    agent_paths: Iterable[str], task_paths: Iterable[str], path: str, protected: frozenset[str]
+) -> bool:
+    """write_file's check: inside the agent's scope AND inside what the plan said this task
+    writes. A PM that leaves payments paths off a node can't reach payments code at runtime."""
+    return can_write(agent_paths, path, protected) and can_write(task_paths, path, protected)
+
+
+def touches(paths: Iterable[str], protected: frozenset[str]) -> set[str]:
+    """Protected directories any of these paths or globs names."""
+    return {part for p in paths for part in PurePosixPath(p).parts if part in protected}

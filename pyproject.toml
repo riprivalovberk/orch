@@ -12,13 +12,18 @@ dependencies = [
     "pyyaml>=6.0",
     "python-ulid>=2.7",
     "typer>=0.12",
+    "pydantic-ai-slim[openai]>=1.0",
 ]
 
 [project.scripts]
 orch = "orch.cli:app"
 
 [dependency-groups]
-dev = ["pytest>=8", "ruff>=0.6"]
+dev = [
+    "pyright>=1.1.414",
+    "pytest>=8",
+    "ruff>=0.6",
+]
 
 [build-system]
 requires = ["hatchling"]

@@ -5,8 +5,10 @@ acceptance_criteria:
   AC-2: Amounts are Decimal, never float
   AC-3: Overdrafts are rejected with 422
 nodes:
-  - {id: write_tests, kind: test, assignee: test_engineer, covers: [AC-1, AC-2]}
-  - {id: implement_transfer, kind: implement, assignee: payments_developer}
+  - {id: write_tests, kind: test, assignee: test_engineer, covers: [AC-1, AC-2],
+     paths: [tests/test_transfers.py]}
+  - {id: implement_transfer, kind: implement, assignee: payments_developer,
+     paths: [minibank/payments/transfers.py]}
   - {id: gates, kind: gate, gates: [pytest, ruff, policy]}
   - {id: approve, kind: approval}
 edges:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import typer
@@ -10,6 +11,7 @@ import yaml
 from orch.core.plan import PlanValidator, ValidationContext
 from orch.core.team import TeamRegistry
 from orch.domain.schemas import Plan
+from orch.paths import data_dir
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 
@@ -46,6 +48,35 @@ def plan_check(
         if e.hint:
             typer.echo(f"      hint: {e.hint}")
     raise typer.Exit(1)
+
+
+NUKE_SECTIONS = ("all", "db", "spike")
+
+
+@app.command()
+def nuke(
+    section: str = typer.Argument("all", help="all | db (orch.db) | spike (spike runs)"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation"),
+) -> None:
+    """Delete what orch has created: everything, or one section of the data folder."""
+    if section not in NUKE_SECTIONS:
+        raise typer.BadParameter(f"pick one of {list(NUKE_SECTIONS)}")
+    d = data_dir()
+    targets = {
+        "all": [d],
+        "db": sorted(d.glob("orch.db*")),  # db + its -wal/-shm files
+        "spike": [d / "spike"],
+    }[section]
+    targets = [t for t in targets if t.exists()]
+    if not targets:
+        typer.echo(f"nothing to delete in {d}")
+        return
+    if not yes:
+        names = ", ".join(str(t) for t in targets)
+        typer.confirm(f"Delete {names}?", abort=True)
+    for t in targets:
+        shutil.rmtree(t) if t.is_dir() else t.unlink()
+        typer.echo(f"deleted {t}")
 
 
 if __name__ == "__main__":

@@ -5,9 +5,10 @@ acceptance_criteria:
   AC-3: Overdrafts are rejected with 422
   AC-4: Logs never contain full account numbers
 nodes:
-  - {id: write_tests, kind: test, assignee: test_engineer, covers: [AC-1, AC-2, AC-3, AC-4]}
+  - {id: write_tests, kind: test, assignee: test_engineer, covers: [AC-1, AC-2, AC-3, AC-4],
+     paths: [tests/test_transfers.py]}
   - {id: implement_transfer, kind: implement, assignee: developer,
-     covers: [AC-1, AC-2, AC-3, AC-4]}
+     covers: [AC-1, AC-2, AC-3, AC-4], paths: [minibank/api/transfers.py]}
   - {id: gates, kind: gate, gates: [pytest, ruff, policy]}
   - {id: review_transfer, kind: review, assignee: reviewer}
   - {id: approve, kind: approval}

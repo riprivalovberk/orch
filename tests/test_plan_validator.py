@@ -107,14 +107,16 @@ def test_verifier_with_outgoing_edge_is_str_005(good_plan, team):
 
 def test_payments_without_specialist_escalates(good_plan, team):
     p = good_plan.model_copy(deep=True)
-    next(n for n in p.nodes if n.id == "implement_transfer").assignee = "payments_developer"
+    impl = next(n for n in p.nodes if n.id == "implement_transfer")
+    impl.assignee, impl.paths = "payments_developer", ["minibank/payments/transfers.py"]
     errors = [e for e in check(p, team) if e.code == "PAY-001"]
     assert errors and errors[0].escalate and "security_review" in errors[0].message
 
 
 def test_payments_with_specialist_needs_node_then_clears(good_plan, team_with_security):
     p = good_plan.model_copy(deep=True)
-    next(n for n in p.nodes if n.id == "implement_transfer").assignee = "payments_developer"
+    impl = next(n for n in p.nodes if n.id == "implement_transfer")
+    impl.assignee, impl.paths = "payments_developer", ["minibank/payments/transfers.py"]
     errors = check(p, team_with_security)
     assert codes(errors) == ["PAY-001"] and not errors[0].escalate
     assert "security_reviewer" in errors[0].hint
@@ -127,6 +129,32 @@ def test_payments_with_specialist_needs_node_then_clears(good_plan, team_with_se
         add_edges=[["implement_transfer", "security_check", "verifies"]],
     )
     assert check(fixed, team_with_security) == []
+
+
+def test_payments_work_given_to_developer_is_scope_001(good_plan, team):
+    """The dodge from the first live spike: move payments work to an agent without review."""
+    p = good_plan.model_copy(deep=True)
+    next(n for n in p.nodes if n.id == "implement_transfer").paths = [
+        "minibank/payments/refunds.py"
+    ]
+    errors = check(p, team)
+    assert codes(errors) == ["PAY-001", "SCOPE-001"]  # declared payments path: review needed too
+    scope = next(e for e in errors if e.code == "SCOPE-001")
+    assert "developer cannot write minibank/payments/refunds.py" in scope.message
+    assert "payments_developer" in scope.hint
+
+
+def test_writing_node_without_paths_is_scope_001(good_plan, team):
+    p = good_plan.model_copy(deep=True)
+    next(n for n in p.nodes if n.id == "write_tests").paths = []
+    errors = check(p, team)
+    assert codes(errors) == ["SCOPE-001"] and "tests/**" in errors[0].hint
+
+
+def test_only_writing_nodes_take_paths(good_plan, team):
+    p = good_plan.model_copy(deep=True)
+    next(n for n in p.nodes if n.id == "review_transfer").paths = ["minibank/**"]
+    assert codes(check(p, team)) == ["SCOPE-001"]
 
 
 def test_limits_str_004(good_plan, team):

@@ -31,6 +31,7 @@ src/orch/
   core/          state machine, team registry, plan validator, event log, orchestrator
   policies/      policy packs (fintech_sdlc: SOD, GATE, COV, APR, PAY rules)
   db/            SQLAlchemy models (12 tables) + SQLite session
+  mcp/           the agent MCP server (run-token identity, tool allow-lists)
   runtime/       Meta Model API wiring, the PM's tools, the PM spike
   paths.py       the one data folder (.orch/)
 teams/           the agent team (YAML)

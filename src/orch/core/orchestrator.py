@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from orch.core.events import EventLog, VerifyResult
@@ -31,6 +32,7 @@ from orch.db.models import (
     Run,
     Task,
     TaskDep,
+    ToolCall,
 )
 from orch.domain.enums import (
     PASSING_OUTCOMES,
@@ -462,12 +464,74 @@ class TaskOrchestrator:
             if run is None or run.ended_at is not None:
                 return None
             t = self._task(s, run.task_id)
+            agent = s.scalar(
+                select(Agent).where(Agent.project_id == t.project_id, Agent.name == t.assignee)
+            )
             return {
                 "run_id": run.id,
                 "task_id": t.id,
                 "project_id": t.project_id,
                 "agent": t.assignee,
                 "kind": t.kind,
+                "tools": list(agent.tools) if agent else [],
+            }
+
+    def begin_tool_call(
+        self, run_id: str, task_id: str, key: str, tool: str, args: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Log a tool call before it acts. A key seen before returns its stored result
+        (a client retry must not submit a plan or write a file twice); None means go ahead.
+
+        Status: started -> ok | error (stored and replayed) | failed (an internal error that
+        committed nothing, so a retry with the same key runs again).
+        """
+        try:
+            with self.tx() as s:
+                prev = s.scalar(select(ToolCall).where(ToolCall.idempotency_key == key))
+                if prev is None:
+                    s.add(
+                        ToolCall(
+                            id=new_id("tcl"),
+                            task_id=task_id,
+                            run_id=run_id,
+                            idempotency_key=key,
+                            tool=tool,
+                            args=args,
+                            status="started",
+                        )
+                    )
+                    return None
+                if prev.tool != tool or prev.args != args:
+                    raise InvalidOperation(
+                        f"tool call id {key} was already used for a different call"
+                    )
+                if prev.status == "started":
+                    raise InvalidOperation(f"tool call {key} is still running")
+                if prev.status == "failed":
+                    prev.status, prev.result, prev.run_id = "started", None, run_id
+                    return None
+                return {"status": prev.status, "result": prev.result}
+        except IntegrityError as e:  # the same key inserted concurrently by another request
+            raise InvalidOperation(f"tool call {key} is still running") from e
+
+    def end_tool_call(self, key: str, status: str, result: Any) -> None:
+        """Store what a tool call returned ("ok") or the error it raised ("error")."""
+        with self.tx() as s:
+            s.execute(
+                update(ToolCall)
+                .where(ToolCall.idempotency_key == key)
+                .values(status=status, result=result)
+            )
+
+    def remaining_budget(self, project_id: str) -> dict[str, float]:
+        """Budget left in USD, as the PM sees it before planning more work."""
+        with self.tx() as s:
+            p = self._project(s, project_id)
+            return {
+                "budget_usd": p.limits.budget_usd,
+                "spent_usd": round(p.spent_usd, 6),
+                "remaining_usd": round(p.limits.budget_usd - p.spent_usd, 6),
+                "est_cost_per_task_usd": p.limits.est_cost_per_task_usd,
             }
 
     def record_usage(

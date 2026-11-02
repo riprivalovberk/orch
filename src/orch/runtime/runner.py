@@ -297,6 +297,12 @@ class Runner:
 
     # ------------------------------------------------------------------ prompts
 
+    def _verified_nodes(self, task: dict[str, Any]) -> list[str]:
+        """Plan node ids of the work a review task checks (none for other tasks)."""
+        if task["kind"] not in REVIEW_KINDS:
+            return []
+        return [self.orch.get_task(t)["node"] for t in self.orch.verified_targets(task["id"])]
+
     def brief(self, task: dict[str, Any]) -> str:
         """The task as the agent reads it: objective, criteria, scope, and any feedback."""
         root = self.orch.evidence(task["root_id"])
@@ -340,6 +346,19 @@ class Runner:
                 + "\n".join(f"- {k}: {v}" for k, v in get_standards(pack).items())
             )
         out.append(f"Your task: {task['title']} ({kind}).")
+        if accepted and (kind == TaskKind.IMPLEMENT or kind in REVIEW_KINDS):
+            mine = {task["node"], *self._verified_nodes(task)}
+            others = [
+                f"- {n['id']}: {n.get('title') or n.get('objective') or ''} "
+                f"(writes {', '.join(n.get('paths') or []) or 'unspecified files'})"
+                for n in accepted[-1]["nodes"]
+                if n["kind"] == TaskKind.IMPLEMENT and n["id"] not in mine
+            ]
+            if others:
+                out.append(
+                    "Other steps of the plan build the rest; their work is not part of this "
+                    "task, so do not write it or ask for it here:\n" + "\n".join(others)
+                )
         if kind in WRITING:
             out.append(
                 "Files this task may write: "

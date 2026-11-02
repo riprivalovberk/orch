@@ -85,6 +85,7 @@ def test_full_lifecycle_with_one_revision(orch, team, good_plan):
     orch.record_review(ids["review_transfer"], CHANGES)
     assert st(orch, impl) == S.READY
     assert orch.get_task(impl)["revision_round"] == 1
+    assert orch.get_task(impl)["attempt"] == 0  # the revision gets every attempt again
     assert st(orch, ids["gates"]) == S.PENDING and st(orch, ids["review_transfer"]) == S.PENDING
 
     # round 1: both pass

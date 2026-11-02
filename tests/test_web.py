@@ -76,6 +76,14 @@ def test_offline_objective_runs_through_approval_to_main(client: TestClient, tmp
     assert c.get("/api/inbox").json() == []
     chat = c.get(f"/api/projects/{p['id']}/chat").json()["messages"]
     assert not chat[-1]["text"].startswith("I had to stop")
+    # the plan message is a live workflow: planning, then every planned task, all timed
+    steps = next(m for m in chat if m.get("steps"))["steps"]
+    assert [s["node"] for s in steps][:3] == ["plan", "write_tests", "implement_transfer"]
+    assert all(s["state"] == "done" for s in steps)
+    assert all(s["started"] and s["ended"] for s in steps)
+    gate = next(s for s in steps if s["node"] == "gates")
+    assert gate["note"] == "all checks passed" and gate["log"]
+    assert not any("started" in m["text"] for m in chat if m["role"] == "activity")
     said = [m["text"] for m in chat if m["role"] in ("user", "pm")]
     assert "approve" in said and any(t.startswith("Merged into main") for t in said)
 

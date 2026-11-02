@@ -14,7 +14,7 @@ from collections.abc import Iterable
 
 from orch.core.plan import PlanGraph, Rule, ValidationContext, err
 from orch.core.scope import can_write, protected_grants, touches
-from orch.domain.enums import REVIEW_KINDS, GateName, TaskKind
+from orch.domain.enums import REVIEW_KINDS, EdgeKind, GateName, TaskKind
 from orch.domain.schemas import PlanError
 
 REQUIRED_GATES = frozenset({GateName.PYTEST, GateName.RUFF, GateName.POLICY})
@@ -95,6 +95,36 @@ def gate_001_required_gates(g: PlanGraph, ctx: ValidationContext) -> Iterable[Pl
                 f"{impl.id} is not verified by gate(s) {', '.join(missing)}",
                 "add a gate node with gates: [pytest, ruff, policy] and a verifies edge "
                 f"from {impl.id}",
+            )
+
+
+def gate_002_whole_suite(g: PlanGraph, ctx: ValidationContext) -> Iterable[PlanError]:
+    """A pytest gate runs every test, so all implement work must be written when it runs.
+
+    The tests are written first, for every criterion. A gate that checks one implement node
+    while another is still to come runs that other node's tests too, and can never pass.
+    """
+    impls = {n.id for n in g.of_kind(TaskKind.IMPLEMENT)}
+    for gate in g.of_kind(TaskKind.GATE):
+        if GateName.PYTEST not in gate.gates:
+            continue
+        targets = {n.id for n in g.verified_by(gate.id)}
+        finished = set(targets)  # targets are submitted; what blocks them is done
+        queue = list(targets)
+        while queue:
+            for e in g.inc[queue.pop()]:
+                if e.kind == EdgeKind.BLOCKS and e.source not in finished:
+                    finished.add(e.source)
+                    queue.append(e.source)
+        later = sorted(impls - finished)
+        if later and targets & impls:
+            yield err(
+                "GATE-002",
+                gate.id,
+                f"{gate.id} runs pytest on {', '.join(sorted(targets))} before "
+                f"{', '.join(later)} is written, so the tests for that work fail there",
+                "use one implement node for the code the tests exercise, or one pytest gate "
+                "that verifies every implement node (they then must not block each other)",
             )
 
 
@@ -242,6 +272,7 @@ RULES: tuple[Rule, ...] = (
     sod_001_independent_review,
     sod_002_pm_does_not_build,
     gate_001_required_gates,
+    gate_002_whole_suite,
     cov_001_criteria_tested,
     apr_001_single_approval,
     scope_001_paths,

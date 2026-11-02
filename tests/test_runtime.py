@@ -395,3 +395,32 @@ def test_briefs_carry_the_interface_and_the_standards(
     assert "STD-001" not in tests_brief  # standards go to the developer and reviewers
     impl_brief = r.brief(orch.get_task(tasks["implement_transfer"]))
     assert "class Transfers(ledger: Ledger)" in impl_brief and "STD-003" in impl_brief
+
+
+def test_briefs_name_the_work_other_steps_build(
+    orch: TaskOrchestrator, team: TeamRegistry, ws: Workspace, good_plan: Plan
+):
+    plan = good_plan.model_dump(mode="json")
+    plan["nodes"] += [
+        {
+            "id": "implement_api",
+            "kind": "implement",
+            "title": "HTTP endpoint",
+            "assignee": "developer",
+            "paths": ["minibank/api.py"],
+        },
+        {"id": "review_api", "kind": "review", "assignee": "reviewer"},
+    ]
+    plan["edges"] += [
+        ["write_tests", "implement_api", "blocks"],
+        ["implement_api", "gates", "verifies"],
+        ["implement_api", "review_api", "verifies"],
+        ["implement_api", "approve", "blocks"],
+    ]
+    _, _, tasks = worker(orch, team, ws, Plan.model_validate(plan))
+    r = runner(orch, team, ws, scripted.scripted_team())
+    impl_brief = r.brief(orch.get_task(tasks["implement_transfer"]))
+    assert "implement_api: HTTP endpoint (writes minibank/api.py)" in impl_brief
+    # a reviewer's own step is the work it checks, so only the other one is listed
+    assert r._verified_nodes(orch.get_task(tasks["review_transfer"])) == ["implement_transfer"]
+    assert "Other steps" not in r.brief(orch.get_task(tasks["write_tests"]))

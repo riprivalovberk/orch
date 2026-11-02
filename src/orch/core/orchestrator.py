@@ -1307,6 +1307,7 @@ class TaskOrchestrator:
             self._transition(s, target, S.DONE, "all verifiers passed", round=target.revision_round)
         elif target.revision_round < self._project(s, target.project_id).limits.max_revision_rounds:
             target.revision_round += 1
+            target.attempt = 0  # each round gets every attempt; the round limit bounds rework
             self._transition(
                 s,
                 target,
@@ -1316,7 +1317,7 @@ class TaskOrchestrator:
                 failed_verifiers=[v.id for v in failed],
             )
             for v in verifiers:
-                v.outcome = None
+                v.outcome, v.attempt = None, 0
                 self._transition(s, v, S.PENDING, f"re-verify {target.id} after revision")
         else:
             self._open_human(

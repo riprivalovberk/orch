@@ -127,7 +127,9 @@ def submit_plan(ctx: RunContext[PMDeps], plan: Plan) -> dict[str, Any]:
     Edges: `blocks` means the target waits for the source to finish; `verifies` points
     from a work node to a gate/review/security_review node that checks it; a work node
     finishes only once its verifiers pass, so never have one verifier check both a node
-    and work that node blocks (point it at the later work only). Test and
+    and work that node blocks (point it at the later work only). A pytest gate runs every
+    test, so it may only run once all implement work is written: prefer one implement node,
+    or one pytest gate over implement nodes that do not block each other. Test and
     implement nodes list `paths`: the files or globs they will write.
     """
     return do_submit_plan(ctx.deps, plan)

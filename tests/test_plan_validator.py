@@ -89,6 +89,39 @@ def test_gate_verifying_tests_and_impl_is_str_006(good_plan, team):
     assert "STR-001" not in codes(check(p, team))  # the edges alone have no cycle
 
 
+SECOND_IMPL = {
+    "id": "implement_api",
+    "kind": "implement",
+    "assignee": "developer",
+    "paths": ["minibank/api.py"],
+}
+
+
+def test_gate_before_later_implementation_is_gate_002(good_plan, team):
+    # positions-rec-5: the gate on the first step ran the tests for the second step's code
+    p = edit(
+        good_plan,
+        add_nodes=[SECOND_IMPL],
+        add_edges=[["implement_transfer", "implement_api"], ["implement_api", "approve"]],
+    )
+    errors = [e for e in check(p, team) if e.code == "GATE-002"]
+    assert len(errors) == 1 and errors[0].node == "gates" and "implement_api" in errors[0].message
+
+
+def test_one_gate_over_parallel_implementations_clears_gate_002(good_plan, team):
+    p = edit(
+        good_plan,
+        add_nodes=[SECOND_IMPL, {"id": "review_api", "kind": "review", "assignee": "reviewer"}],
+        add_edges=[
+            ["write_tests", "implement_api"],
+            ["implement_api", "gates", "verifies"],
+            ["implement_api", "review_api", "verifies"],
+            ["implement_api", "approve"],
+        ],
+    )
+    assert check(p, team) == []
+
+
 def test_dangling_edge_short_circuits(good_plan, team):
     errors = check(edit(good_plan, add_edges=[["ghost", "approve"]]), team)
     assert codes(errors) == ["STR-002"]

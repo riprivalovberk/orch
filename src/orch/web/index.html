@@ -90,6 +90,24 @@ section#view.chat-mode { padding: 0; display: flex; flex-direction: column; heig
 .working { padding: 6px 22px; font-size: 12px; color: var(--accent); min-height: 4px; }
 .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); margin-right: 6px; animation: pulse 1.2s infinite; }
 @keyframes pulse { 50% { opacity: .25; } }
+.wf { margin-top: 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); overflow: hidden; }
+.wf-head { display: flex; justify-content: space-between; gap: 10px; padding: 8px 12px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); }
+.wf details { border-top: 1px solid var(--line); margin-top: 0; } .wf details:first-of-type { border-top: 0; }
+.wf summary { display: flex; align-items: center; gap: 10px; padding: 7px 12px; cursor: pointer; list-style: none; }
+.wf summary::-webkit-details-marker { display: none; }
+.wf .nm { font-family: var(--mono); font-size: 13px; } .wf .sub { flex: 1; min-width: 0; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf .dur { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.wf .log { padding: 2px 12px 8px 36px; font-size: 12px; color: var(--muted); } .wf .log div { padding: 1px 0; }
+.wf .st-waiting .nm, .wf .st-queued .nm, .wf .st-rerun .nm, .wf .st-canceled .nm { color: var(--muted); }
+.ic { flex: none; width: 14px; height: 14px; border-radius: 50%; display: grid; place-items: center; font-size: 10px; line-height: 1; color: #fff; font-weight: 700; box-sizing: border-box; }
+.st-done .ic { background: var(--ok); } .st-done .ic::after { content: "✓"; }
+.st-failed .ic { background: var(--bad); } .st-failed .ic::after { content: "✕"; }
+.st-running .ic { border: 2px solid var(--warn); border-top-color: transparent; animation: spin .9s linear infinite; }
+.st-checking .ic { border: 2px solid var(--warn); } .st-checking .ic::after { content: ""; width: 4px; height: 4px; border-radius: 50%; background: var(--warn); }
+.st-needs_you .ic { background: var(--warn); } .st-needs_you .ic::after { content: "!"; }
+.st-queued .ic, .st-waiting .ic, .st-rerun .ic { border: 2px solid var(--line); }
+.st-canceled .ic { border: 2px solid var(--muted); } .st-canceled .ic::after { content: ""; width: 6px; height: 2px; background: var(--muted); }
+@keyframes spin { to { transform: rotate(360deg); } }
 .composer { border-top: 1px solid var(--line); padding: 10px 18px 12px; background: var(--panel); }
 .composer textarea { font-family: inherit; font-size: 14px; resize: vertical; min-height: 44px; }
 .composer .opts summary { cursor: pointer; } .composer .opts[open] { width: 100%; }
@@ -366,7 +384,10 @@ function msgHtml(m, objectives) {
   const who = m.role === "user" ? "You" : m.actor === "system" ? "orch" : "PM";
   const req = m.request;
   let extra = "";
-  if (m.plan && m.plan.length) {
+  if (m.steps) {
+    const crit = Object.entries(m.criteria || {});
+    if (crit.length) extra += `<details><summary>${crit.length} acceptance criteria</summary>${crit.map(([k, v]) => `<div style="margin-top:4px"><strong>${esc(k)}</strong> ${esc(v)}</div>`).join("")}</details>`;
+  } else if (m.plan && m.plan.length) {
     extra += `<ol>${m.plan.map(t => `<li><span class="mono">${esc(t.node)}</span> <span class="muted">${esc(t.kind)}${t.assignee ? " · " + esc(t.assignee) : ""}</span></li>`).join("")}</ol>`;
     const crit = Object.entries(m.criteria || {});
     if (crit.length) extra += `<details><summary>${crit.length} acceptance criteria</summary>${crit.map(([k, v]) => `<div style="margin-top:4px"><strong>${esc(k)}</strong> ${esc(v)}</div>`).join("")}</details>`;
@@ -376,12 +397,48 @@ function msgHtml(m, objectives) {
     acts = `<div class="acts">${req.options.map(o => `<button class="${["approve", "override_approve"].includes(o) ? "primary" : ""}" onclick="answer('${req.id}', ${esc(JSON.stringify(o))})">${esc(OPTION_LABELS[o] || o)}</button>`).join("")}</div>`;
   else if (req && req.open) acts = `<div class="acts muted" style="font-size:12px">Reply below.</div>`;
   const cls = `msg ${m.role}${req && req.open ? " ask" : ""}`;
-  let html = `<div class="${cls}"><div class="who">${who}${req ? " · " + esc(req.kind) : ""}</div><div class="bubble">${esc(m.text)}${extra}</div>${acts}</div>`;
+  const wf = m.steps ? stepsHtml(m.steps) : "";
+  let html = `<div class="${cls}"><div class="who">${who}${req ? " · " + esc(req.kind) : ""}</div><div class="bubble">${esc(m.text)}${extra}</div>${wf}${acts}</div>`;
   if (m.starts_objective) {
     const o = objectives.find(x => x.id === m.root_id);
     html = `<div class="divider">New objective · ${o ? st(o.status) : ""} <a href="#/objective/${m.root_id}">tasks and evidence</a></div>` + html;
   }
   return html;
+}
+
+const STEP_LABEL = {done: "done", failed: "failed", running: "working", checking: "in checks and review",
+  needs_you: "waiting for you", queued: "up next", rerun: "will re-run", waiting: "not started", canceled: "canceled"};
+const openSteps = new Set();
+
+function fmtDur(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+  return `${Math.floor(s / 3600)}h ${Math.floor(s / 60) % 60}m`;
+}
+function durAttrs(start, end) { return start ? `data-start="${esc(start)}"${end ? ` data-end="${esc(end)}"` : ""}` : ""; }
+function tickDurations() {
+  document.querySelectorAll(".dur[data-start]").forEach(el => {
+    const end = el.dataset.end ? Date.parse(el.dataset.end) : Date.now();
+    el.textContent = fmtDur(end - Date.parse(el.dataset.start));
+  });
+}
+setInterval(tickDurations, 1000);
+
+function stepsHtml(steps) {
+  const done = steps.filter(x => x.state === "done").length;
+  const live = steps.some(x => ["running", "checking", "needs_you", "queued"].includes(x.state));
+  const first = steps.find(x => x.started), last = steps.map(x => x.ended).filter(Boolean).sort().pop();
+  const head = `<div class="wf-head"><span>${done} of ${steps.length} steps done</span>
+    <span class="dur" ${first ? durAttrs(first.started, live ? null : last) : ""}></span></div>`;
+  return `<div class="wf">${head}${steps.map(x => {
+    const sub = [x.assignee, STEP_LABEL[x.state], x.note].filter(Boolean).map(esc).join(" · ");
+    const log = x.log.map(l => `<div><span class="mono">${esc(new Date(l.ts).toLocaleTimeString([], {hour12: false}))}</span> ${esc(l.text)}</div>`).join("");
+    return `<details class="st-${x.state}" data-step="${x.id}" ${openSteps.has(x.id) ? "open" : ""}
+      ontoggle="this.open ? openSteps.add(this.dataset.step) : openSteps.delete(this.dataset.step)">
+      <summary><span class="ic"></span><span class="nm">${esc(x.node)}</span><span class="sub">${sub}</span>
+      <span class="dur" ${durAttrs(x.started, x.ended)}></span></summary>${log ? `<div class="log">${log}</div>` : ""}</details>`;
+  }).join("")}</div>`;
 }
 
 function threadHtml(messages, objectives) {
@@ -409,6 +466,7 @@ async function loadChat(pid) {
     const atBottom = !chatSig || box.scrollHeight - box.scrollTop - box.clientHeight < 60;
     chatSig = sig;
     box.innerHTML = threadHtml(data.messages, p ? p.objectives : []);
+    tickDurations();
     if (atBottom) box.scrollTop = box.scrollHeight;
   }
   $("#working").innerHTML = data.working.map(w => `<div><span class="dot"></span>${esc(w)}…</div>`).join("") ||

@@ -256,6 +256,11 @@ def chat_messages(orch: TaskOrchestrator, runs: Runs, pid: str) -> dict[str, Any
     tasks = {t["id"]: t for root in objectives for t in orch.task_tree(root)}
     open_reqs = {r["id"]: r for r in orch.open_human_requests(pid)}
     out: list[dict[str, Any]] = []
+    # Each objective's plan message carries live steps; their updates fold in under them.
+    plan_msgs: dict[str, dict[str, Any]] = {}
+    timing: dict[str, dict[str, str | None]] = {}
+    logs: dict[str, list[dict[str, str]]] = {}
+    notes: dict[str, str] = {}
     events = orch.list_events(project_id=pid, limit=20_000)
     from_chat = {e["payload"].get("objective_id") for e in events if e["type"] == "chat.reply"} - {
         None
@@ -296,19 +301,34 @@ def chat_messages(orch: TaskOrchestrator, runs: Runs, pid: str) -> dict[str, Any
             crit = objectives[root]["criteria"] if root in objectives else {}
             text = f"Here is the plan (v{p['version']}), checked against the rules. Starting now."
             out.append(_msg(e, "pm", text, root_id=root, plan=steps, criteria=crit))
+            if root:
+                plan_msgs[root] = out[-1]
         elif kind == "task.status" and t:
+            _track(timing.setdefault(tid, {"started": None, "ended": None}), p, e["ts"])
             line = _status_line(t, p, tid in objectives)
-            if line:
+            if tid not in objectives:  # a planned step: shown in its row on the plan
+                if line:
+                    logs.setdefault(tid, []).append({"ts": e["ts"], "text": line})
+                note = _step_note(t, p)
+                if note:
+                    notes[tid] = note
+                elif p["to"] == "READY":  # reopened: the old result no longer applies
+                    notes.pop(tid, None)
+            elif line:
                 role = "pm" if tid in objectives and p["to"] in ("DONE", "FAILED") else "activity"
                 out.append(_msg(e, role, line, root_id=root))
         elif kind == "workspace.merged_to_main":
             out.append(_msg(e, "pm", f"Merged into main ({p['detail'][:10]}).", root_id=root))
         elif kind == "workspace.merge_conflict":
             out.append(_msg(e, "activity", f"merge conflict on {p['branch']}", root_id=root))
+        elif kind == "artifact.added" and t and tid not in objectives:
+            logs.setdefault(tid, []).append({"ts": e["ts"], "text": f"attached {p['name']}"})
         elif kind == "artifact.added":
             out.append(_msg(e, "activity", f"{node} attached {p['name']}", root_id=root))
         elif kind == "repo.files_added":
             out.append(_msg(e, "activity", f"uploaded {', '.join(p['files'])}"))
+    for root, m in plan_msgs.items():
+        m["steps"] = _steps(root, tasks, timing, logs, notes)
     working: list[str] = ["the PM is writing a reply"] if pid in runs.chatting else []
     for rid in runs.running():
         for t in orch.task_tree(rid) if rid in objectives else []:
@@ -348,6 +368,89 @@ def chat_messages(orch: TaskOrchestrator, runs: Runs, pid: str) -> dict[str, Any
         "running": running,
         "open_requests": list(open_reqs.values()),
     }
+
+
+STEP_STATE = {
+    "RUNNING": "running",
+    "VERIFYING": "checking",
+    "AWAITING_HUMAN": "needs_you",
+    "READY": "queued",
+    "PENDING": "waiting",
+    "FAILED": "failed",
+    "CANCELED": "canceled",
+}
+
+
+def _track(d: dict[str, str | None], p: dict[str, Any], ts: str) -> None:
+    """A step's clock: from its first start to when it last finished (cleared if reopened)."""
+    to = p["to"]
+    if to in ("RUNNING", "AWAITING_HUMAN") and not d["started"]:
+        d["started"] = ts
+    if to in ("DONE", "FAILED", "CANCELED", "WAITING"):
+        d["ended"] = d["ended"] if p["from"] == "WAITING" else ts  # root: planning time only
+    elif to in ("READY", "RUNNING"):
+        d["ended"] = None
+
+
+def _step_note(t: dict[str, Any], p: dict[str, Any]) -> str:
+    """The latest result worth showing next to a step, or ""."""
+    if t["kind"] == "gate" and p["to"] == "DONE":
+        failed = [g for g, ok in (p.get("results") or {}).items() if not ok]
+        return f"{', '.join(failed)} failed" if failed else "all checks passed"
+    if p.get("reason", "").startswith("review:"):
+        return str(p.get("verdict", p["reason"].removeprefix("review: "))).replace("_", " ")
+    if p["to"] == "FAILED":
+        return p.get("reason", "")[:120]
+    return ""
+
+
+def _steps(
+    root: str,
+    tasks: dict[str, dict[str, Any]],
+    timing: dict[str, dict[str, str | None]],
+    logs: dict[str, list[dict[str, str]]],
+    notes: dict[str, str],
+) -> list[dict[str, Any]]:
+    """The objective as a workflow: planning, then each planned task in the order written."""
+    r, clock = tasks[root], timing.get(root, {})
+    plan_state = "done" if clock.get("ended") else STEP_STATE.get(r["status"], "running")
+    steps = [
+        {
+            "id": root,
+            "node": "plan",
+            "assignee": "project_manager",
+            "state": plan_state,
+            "note": "",
+            "started": clock.get("started"),
+            "ended": clock.get("ended"),
+            "log": [],
+        }
+    ]
+    for tid in sorted(t for t, x in tasks.items() if x["root_id"] == root and t != root):
+        t, c = tasks[tid], timing.get(tid, {})
+        state = STEP_STATE.get(t["status"], "running")
+        if t["status"] == "DONE":
+            state = "done" if t["outcome"] in ("pass", "waived") else "failed"
+        note = notes.get(tid, "")
+        if state in ("waiting", "queued") and c.get("started"):  # ran before, reopened
+            state, note = "rerun", f"last run: {note}" if note else ""
+        if t["outcome"] == "waived":
+            note = "overridden by you" + (f" · {note}" if note else "")
+        if t["revision_round"]:
+            note = f"revision {t['revision_round']}" + (f" · {note}" if note else "")
+        steps.append(
+            {
+                "id": tid,
+                "node": t["node"],
+                "assignee": t["assignee"] or ("you" if t["kind"] == "approval" else t["kind"]),
+                "state": state,
+                "note": note,
+                "started": c.get("started"),
+                "ended": c.get("ended") if state not in ("running", "checking") else None,
+                "log": logs.get(tid, []),
+            }
+        )
+    return steps
 
 
 def _status_line(t: dict[str, Any], p: dict[str, Any], is_root: bool) -> str:

@@ -291,3 +291,21 @@ def test_planned_tasks_keep_their_paths(orch, team, good_plan):
     _, _, ids = planned(orch, team, good_plan)
     assert orch.get_task(ids["implement_transfer"])["paths"] == ["minibank/api/transfers.py"]
     assert orch.get_task(ids["gates"])["paths"] == []
+
+
+def test_review_may_block_on_an_engineering_standard(orch, team, good_plan):
+    _, _, ids = planned(orch, team, good_plan)
+    start(orch, ids["write_tests"])
+    orch.complete(ids["write_tests"], "ok")
+    start(orch, ids["implement_transfer"])
+    orch.complete(ids["implement_transfer"], "ok")
+    start(orch, ids["review_transfer"])
+    alias = Finding(
+        severity="major", issue="pct_diff only renames pct_difference", criterion_id="STD-001"
+    )
+    verdict = ReviewVerdict(verdict="request_changes", findings=[alias])
+    assert orch.record_review(ids["review_transfer"], verdict) == S.DONE
+    root = orch.get_task(ids["review_transfer"])["root_id"]
+    (review,) = orch.evidence(root)["reviews"]
+    assert review["verdict"] == "request_changes"
+    assert review["findings"][0]["criterion_id"] == "STD-001"

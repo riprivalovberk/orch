@@ -259,8 +259,9 @@ def submit_review(
 ) -> dict[str, Any]:
     """Record your review of the change.
 
-    request_changes needs at least one blocker or major finding that cites a
-    criterion_id (AC-1, ...). approve when every criterion is met.
+    request_changes needs at least one blocker or major finding whose criterion_id cites
+    an acceptance criterion (AC-1, ...) or an engineering standard (STD-001, ...). Say in
+    the issue exactly what to change. approve when every criterion and standard is met.
 
     Args:
         verdict: approve or request_changes

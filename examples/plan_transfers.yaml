@@ -4,6 +4,10 @@ acceptance_criteria:
   AC-2: Amounts are Decimal, never float
   AC-3: Overdrafts are rejected with 422
   AC-4: Logs never contain full account numbers
+interface: >-
+  minibank/api/transfers.py: class Transfers(ledger: Ledger) with post(req: Request) ->
+  Response. Body JSON {from, to, amount (Decimal string)}; header Idempotency-Key.
+  201 on success, 422 on overdraft, the stored response again for a repeated key.
 nodes:
   - {id: write_tests, kind: test, assignee: test_engineer, covers: [AC-1, AC-2, AC-3, AC-4],
      paths: [tests/test_transfers.py]}

@@ -370,3 +370,14 @@ def test_pm_reads_the_repo_and_is_asked_for_criteria_when_none_given(
     brief = runner(orch, team, ws, scripted.scripted_team()).brief(orch.get_task(root))
     assert "No acceptance criteria were given" in brief
 
+
+def test_briefs_carry_the_interface_and_the_standards(
+    orch: TaskOrchestrator, team: TeamRegistry, ws: Workspace, good_plan: Plan
+):
+    _, c, tasks = worker(orch, team, ws, good_plan)
+    r = runner(orch, team, ws, scripted.scripted_team())
+    tests_brief = r.brief(orch.get_task(tasks["write_tests"]))
+    assert "class Transfers(ledger: Ledger)" in tests_brief
+    assert "STD-001" not in tests_brief  # standards go to the developer and reviewers
+    impl_brief = r.brief(orch.get_task(tasks["implement_transfer"]))
+    assert "class Transfers(ledger: Ledger)" in impl_brief and "STD-003" in impl_brief

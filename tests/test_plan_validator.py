@@ -173,3 +173,10 @@ def test_cycle_is_reported_in_edge_order():
     assert cycle is not None and cycle[0] == cycle[-1]
     pairs = set(itertools.pairwise(cycle))
     assert pairs == {("a", "b"), ("b", "c"), ("c", "a")}
+
+
+def test_iface001_code_needs_an_interface_first(team, good_plan):
+    p = good_plan.model_copy(update={"interface": ""})
+    errors = check(p, team)
+    assert [e.code for e in errors] == ["IFACE-001"] and "exact names" in errors[0].hint
+    assert check(good_plan, team) == []

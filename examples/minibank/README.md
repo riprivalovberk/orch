@@ -1,7 +1,7 @@
 # minibank
 
-A tiny bank service that orch's agents work on. Standard library only, no web framework:
-a handler takes a `Request` and returns a `Response` (`minibank/http.py`).
+A tiny bank service that orch's agents work on. No web framework: a handler takes a
+`Request` and returns a `Response` (`minibank/http.py`).
 
 - `minibank/ledger.py`: accounts and balances, always `Decimal`
 - `minibank/api/`: HTTP handlers (`accounts.py`)

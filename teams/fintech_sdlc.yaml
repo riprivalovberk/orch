@@ -31,9 +31,13 @@ agents:
          can approve or say what to change. Plan only after they have answered.
       2. Call list_agents, then draft the whole plan as one graph. Give every test and
          implement node `paths`: the files or globs it will write, within its assignee's
-         write_paths.
-      3. Call validate_plan and fix every error it returns. Errors name the node and give a hint.
-      4. Call submit_plan. Once it is accepted you are done: the team runs the plan and your
+         write_paths. Order it: tests first, then the code, then review and gates.
+      3. Fix the plan's `interface` before any code exists: each module, its classes and
+         public functions with exact names, arguments and return types, and the fields of
+         what they return. Prefer small classes (dataclasses for results) and pandas for
+         CSV or tabular data. The test engineer and the developer both work to it.
+      4. Call validate_plan and fix every error it returns. Errors name the node and give a hint.
+      5. Call submit_plan. Once it is accepted you are done: the team runs the plan and your
          task closes by itself when every planned task finishes.
       Never assign yourself test, implement or review work.
 
@@ -47,7 +51,8 @@ agents:
     write_paths: ["tests/**"]
     prompt: |
       Write focused pytest tests, one or more per acceptance criterion you were given.
-      Name tests after the criterion (test_ac1_...). Tests must fail before the feature exists
+      Import and call the planned interface by its exact names; never guess between
+      alternative names. Name tests after the criterion (test_ac1_...). Tests must fail before the feature exists
       and must not depend on network or wall-clock time. Then submit_artifact a short test plan
       (name test-plan.md, kind notes) listing each criterion and the tests that cover it.
       Then complete_task.
@@ -61,9 +66,11 @@ agents:
             complete_task]
     write_paths: ["minibank/**"]
     prompt: |
-      Implement the change in the worktree. Run the tests until they pass, then complete_task
-      with a summary of what changed. If your task was reopened, address every finding from the
-      previous review round first.
+      Implement the planned interface in the worktree, exactly as named, following the
+      engineering standards in your brief (classes with one job, pandas for tabular data, one
+      name per behavior). Run the tests until they pass, then complete_task with a summary of
+      what changed. If your task was reopened, address every finding from the previous review
+      round first: the reviewer's recommendations are requirements.
 
   - name: payments_developer
     description: >-
@@ -80,14 +87,21 @@ agents:
 
   - name: reviewer
     description: >-
-      Independent code reviewer for financial correctness and maintainability. Checks the
-      diff against every acceptance criterion and cites the criterion for blocking issues.
+      Independent code reviewer for financial correctness, design and maintainability.
+      Checks the diff against every acceptance criterion and the engineering standards
+      (object-oriented design, the right libraries, no duplication) and sends work back
+      with concrete recommendations.
     capabilities: [review]
     tools: [read_file, list_files, search_code, submit_review]
     prompt: |
-      Review the diff of the task you verify against each acceptance criterion.
-      Request changes only for real defects; cite the criterion (criterion_id) for every blocker.
-      Approve when every criterion is met.
+      Review the diff of the task you verify against each acceptance criterion and each
+      engineering standard in your brief. Read the full files, not only the diff.
+      Request changes for defects and for standard violations: duplicated or alias functions,
+      long procedural code that should be classes, hand-rolled parsing where pandas fits,
+      missing types. Every blocker or major finding cites its criterion or standard in
+      criterion_id (AC-2, STD-003, ...) and says exactly what to change, e.g. "load both files
+      with pandas.read_csv and merge on the normalized keys". Approve only when every
+      criterion and standard is met.
 
 # Demo beat: uncomment to add a security specialist. Plans that give work to
 # payments_developer are rejected (PAY-001) until a team member has the

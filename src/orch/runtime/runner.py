@@ -34,6 +34,7 @@ from orch.domain.enums import (
 )
 from orch.domain.schemas import GateResultIn
 from orch.mcp.server import CALL_ID_META, serve
+from orch.policies import get_standards
 from orch.policies.fintech_sdlc import SENSITIVE_DIRS
 from orch.runtime import gates
 from orch.runtime.model import DEFAULT_MODEL, cost_usd
@@ -326,6 +327,18 @@ class Runner:
             return "\n\n".join(out)
 
         out.append(f"Acceptance criteria:\n{criteria}")
+        accepted = [p["spec"] for p in root["plans"] if p["valid"]]
+        if accepted and accepted[-1]["interface"]:
+            out.append(
+                "Interface (agreed in the plan; tests and code use exactly these names):\n"
+                + accepted[-1]["interface"]
+            )
+        if kind == TaskKind.IMPLEMENT or kind in REVIEW_KINDS:
+            pack = self.orch.get_project(root["project_id"])["policy_pack"]
+            out.append(
+                "Engineering standards (reviewers block on these):\n"
+                + "\n".join(f"- {k}: {v}" for k, v in get_standards(pack).items())
+            )
         out.append(f"Your task: {task['title']} ({kind}).")
         if kind in WRITING:
             out.append(
@@ -354,7 +367,10 @@ class Runner:
                     f"(round {target['revision_round']}).\nTheir summary: {target['summary']}\n\n"
                     f"Diff:\n{self.ws.diff(target_id)}"
                 )
-            out.append("Check the change against every criterion, then call submit_review.")
+            out.append(
+                "Check the change against every criterion and every standard, then call "
+                "submit_review."
+            )
         return "\n\n".join(out)
 
 

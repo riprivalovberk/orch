@@ -3,6 +3,9 @@
 SOD  segregation of duties     GATE  deterministic checks     COV  test coverage
 APR  human approval            PAY   payments code needs a security review
 SCOPE  every test/implement node says what it writes, and its assignee may write it
+IFACE  a plan that builds code fixes its interface first, so tests and code agree
+
+STANDARDS are the engineering rules reviewers may block on, besides the acceptance criteria.
 """
 
 from __future__ import annotations
@@ -18,6 +21,20 @@ REQUIRED_GATES = frozenset({GateName.PYTEST, GateName.RUFF, GateName.POLICY})
 SENSITIVE_DIRS = frozenset({"payments"})
 BUILD_KINDS = frozenset({TaskKind.IMPLEMENT, TaskKind.TEST, *REVIEW_KINDS})
 WRITING_KINDS = (TaskKind.TEST, TaskKind.IMPLEMENT)
+MIN_INTERFACE_CHARS = 40
+
+STANDARDS: dict[str, str] = {
+    "STD-001": "One name per behavior: no aliases, wrappers that only rename, or duplicate "
+    "keys holding the same value.",
+    "STD-002": "Object-oriented design where there is state or a workflow: small classes "
+    "with one job each, typed attributes (dataclasses), and no long procedural functions.",
+    "STD-003": "Use the well-known library for the job instead of hand-rolled code: pandas "
+    "for CSV and tabular data, decimal.Decimal for money, the standard library otherwise.",
+    "STD-004": "Readable and typed: type hints on public functions, docstrings on public "
+    "classes, constants named, no dead code or commented-out code.",
+    "STD-005": "Tests exercise the planned interface by its exact names; no guessing "
+    "between alternative names (getattr/hasattr probing).",
+}
 
 
 def sod_001_independent_review(g: PlanGraph, ctx: ValidationContext) -> Iterable[PlanError]:
@@ -208,6 +225,19 @@ def pay_001_security_review(g: PlanGraph, ctx: ValidationContext) -> Iterable[Pl
             )
 
 
+def iface_001_interface_first(g: PlanGraph, ctx: ValidationContext) -> Iterable[PlanError]:
+    """A plan with implement work states the interface, so tests and code are written to it."""
+    if g.of_kind(TaskKind.IMPLEMENT) and len(g.plan.interface.strip()) < MIN_INTERFACE_CHARS:
+        yield err(
+            "IFACE-001",
+            None,
+            "the plan builds code but does not fix its interface",
+            "set the plan's interface: each module, its classes and public functions with "
+            "exact names, arguments and return types (and result fields), so the tests can be "
+            "written before the code",
+        )
+
+
 RULES: tuple[Rule, ...] = (
     sod_001_independent_review,
     sod_002_pm_does_not_build,
@@ -216,4 +246,5 @@ RULES: tuple[Rule, ...] = (
     apr_001_single_approval,
     scope_001_paths,
     pay_001_security_review,
+    iface_001_interface_first,
 )

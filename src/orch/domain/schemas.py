@@ -168,6 +168,9 @@ class Plan(BaseModel):
 
     objective: str
     acceptance_criteria: dict[str, str] = Field(default_factory=dict)
+    # The code contract test and implement work share: modules, classes, functions with
+    # signatures, and what they return. Tests are written against it before the code exists.
+    interface: str = ""
     nodes: list[PlanNode]
     edges: list[PlanEdge] = Field(default_factory=list)
 

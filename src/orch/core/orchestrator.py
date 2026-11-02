@@ -49,7 +49,7 @@ from orch.domain.enums import (
 )
 from orch.domain.schemas import GateResultIn, Plan, PlanError, ProjectLimits, ReviewVerdict
 from orch.ids import new_id, now_iso
-from orch.policies import get_pack
+from orch.policies import get_pack, get_standards
 
 S = TaskStatus
 SYSTEM = "system"
@@ -615,12 +615,14 @@ class TaskOrchestrator:
     def record_review(
         self, review_task_id: str, verdict: ReviewVerdict, *, actor: str | None = None
     ) -> str:
-        """A reviewer's verdict. Blocking findings must cite an acceptance criterion."""
+        """A reviewer's verdict. Blocking findings must cite an acceptance criterion or one of
+        the policy pack's engineering standards."""
         with self.tx() as s:
             v = self._running(s, review_task_id)
             if v.kind not in REVIEW_KINDS:
                 raise InvalidOperation(f"{v.id} is a {v.kind} task, not a review")
-            criteria = self._root(s, v).acceptance_criteria or {}
+            standards = get_standards(self._project(s, v.project_id).policy_pack)
+            criteria = {**(self._root(s, v).acceptance_criteria or {}), **standards}
             if verdict.verdict == Verdict.REQUEST_CHANGES:
                 blocking = [f for f in verdict.findings if f.severity in ("blocker", "major")]
                 if not blocking:
@@ -630,8 +632,8 @@ class TaskOrchestrator:
                 uncited = [f.issue for f in blocking if f.criterion_id not in criteria]
                 if uncited:
                     raise InvalidOperation(
-                        "every blocker or major finding must cite an acceptance criterion "
-                        f"({sorted(criteria)}); missing on: {uncited}"
+                        "every blocker or major finding must cite an acceptance criterion or "
+                        f"a standard in criterion_id ({sorted(criteria)}); missing on: {uncited}"
                     )
             reviewer = actor or v.assignee or SYSTEM
             for target in self._verified_targets(s, v.id):
@@ -812,6 +814,7 @@ class TaskOrchestrator:
                 "id": p.id,
                 "name": p.name,
                 "repo_path": p.repo_path,
+                "policy_pack": p.policy_pack,
                 "budget_usd": p.limits.budget_usd,
                 "spent_usd": round(p.spent_usd, 6),
             }

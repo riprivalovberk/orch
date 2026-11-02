@@ -26,6 +26,9 @@ PM_TOOLS = {
     "get_task_status",
     "get_task_tree",
     "get_remaining_budget",
+    "read_file",
+    "list_files",
+    "search_code",
     "request_human_input",
 }
 

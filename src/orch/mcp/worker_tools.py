@@ -51,6 +51,8 @@ class WorkerDeps:
         c = self.caller
         if c.kind in WRITING:
             return self.ws.task_dir(c.task_id)
+        if c.kind == TaskKind.PLAN:  # the PM reads the objective's branch to write criteria
+            return self.ws.objective_dir(self.orch.get_task(c.task_id)["root_id"])
         if c.kind in REVIEW_KINDS:
             targets = self.orch.verified_targets(c.task_id)
             if targets:

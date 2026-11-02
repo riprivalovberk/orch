@@ -28,6 +28,10 @@ uv run orch run "Add an idempotent POST /transfers endpoint in minibank/api/tran
   --ac "A repeated Idempotency-Key never double-posts" --ac "Amounts are Decimal, never float"
 ```
 
+`--ac` is optional. Without it the PM reads the repo (code and any sample data), writes
+numbered criteria itself and asks you to confirm them before it plans: reply to approve them
+or say what to change.
+
 The PM plans, the validator checks the plan, then the team works in parallel (`--parallel 3`):
 each test/implement task in its own git worktree, gates (pytest, ruff, policy) run by the
 runner, reviews by an independent agent, and a human approval before the change merges into

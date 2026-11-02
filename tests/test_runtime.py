@@ -349,3 +349,24 @@ def test_cli_resume_uses_the_objectives_repo_and_budget_updates(tmp_path: Path, 
     assert not (tmp_path / "data" / "repos" / "minibank").exists()
 
     assert cli.invoke(app, ["run", "--offline", "--parallel", "0"]).exit_code != 0
+
+
+def test_pm_reads_the_repo_and_is_asked_for_criteria_when_none_given(
+    orch: TaskOrchestrator, team: TeamRegistry, ws: Workspace
+):
+    pid = orch.create_project("minibank")
+    orch.register_team(pid, team)
+    root = orch.create_root_task(pid, "Reconcile two position files")  # no criteria
+    claim = orch.claim(root)
+    assert claim is not None
+    ws.start_objective(root)
+    srv = AgentMCP(orch, ws)
+    c = run(srv.caller(claim.run_token))
+    listed = run(srv.call(c, "list_files", {"glob": "minibank/*.py"}))
+    assert "minibank/ledger.py" in listed.content[0].text  # type: ignore[union-attr]
+    assert run(srv.call(c, "read_file", {"path": "minibank/ledger.py"})).is_error is False
+    assert run(srv.call(c, "write_file", {"path": "x.py", "content": ""})).is_error
+
+    brief = runner(orch, team, ws, scripted.scripted_team()).brief(orch.get_task(root))
+    assert "No acceptance criteria were given" in brief
+

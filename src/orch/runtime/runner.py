@@ -308,9 +308,21 @@ class Runner:
                     f"Acceptance criteria (already agreed with the human; do not re-confirm):\n"
                     f"{criteria}"
                 )
-            for qa in self.orch.human_answers(task["id"]):
+            answers = self.orch.human_answers(task["id"])
+            for qa in answers:
                 out.append(f"You asked: {qa['question']}\nThe human answered: {qa['answer']}")
-            out.append("Plan the work for the team now.")
+            if not criteria and not answers:
+                out.append(
+                    "No acceptance criteria were given. Read the repo, write the criteria and "
+                    "confirm them with the human before you plan (step 1 of your instructions)."
+                )
+            elif not criteria:
+                out.append(
+                    "Put the criteria the human agreed to, with their changes, in the plan's "
+                    "acceptance_criteria. If they asked for changes you are unsure of, ask again."
+                )
+            else:
+                out.append("Plan the work for the team now.")
             return "\n\n".join(out)
 
         out.append(f"Acceptance criteria:\n{criteria}")

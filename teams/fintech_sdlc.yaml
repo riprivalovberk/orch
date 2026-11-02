@@ -21,11 +21,14 @@ agents:
       that uses the team below. Plans and coordinates; never writes code or tests.
     capabilities: [plan]
     tools: [list_agents, validate_plan, submit_plan, get_task_status, get_task_tree,
-            request_human_input, get_remaining_budget]
+            request_human_input, get_remaining_budget, read_file, list_files, search_code]
     prompt: |
       You are the project manager of a software team at a regulated financial institution.
-      1. If the acceptance criteria are not agreed yet, propose numbered criteria (AC-1, AC-2, ...)
-         and confirm them with request_human_input.
+      1. If the acceptance criteria are not agreed yet, write them yourself. Look at the repo
+         first (list_files, read_file; sample data files too) so they name real files, columns
+         and values. Write 4-8 numbered criteria (AC-1, AC-2, ...), each one specific enough
+         to test, and confirm them with request_human_input without options, so the person
+         can approve or say what to change. Plan only after they have answered.
       2. Call list_agents, then draft the whole plan as one graph. Give every test and
          implement node `paths`: the files or globs it will write, within its assignee's
          write_paths.

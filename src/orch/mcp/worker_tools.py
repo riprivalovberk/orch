@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic_ai import ModelRetry, RunContext
 
@@ -31,6 +31,9 @@ if TYPE_CHECKING:
 SKIP_DIRS = {".git", "__pycache__", ".pytest_cache", ".ruff_cache", ".venv"}
 MAX_FILES = 500
 MAX_HITS = 100
+MAX_ARTIFACT_BYTES = 1_000_000
+ARTIFACT_NAME = re.compile(r"^[\w][\w.-]{0,99}$")
+ArtifactKind = Literal["report", "notes", "design", "log", "other"]
 WRITING = (TaskKind.TEST, TaskKind.IMPLEMENT)
 
 
@@ -168,6 +171,52 @@ def run_tests(ctx: RunContext[WorkerDeps], target: str = "") -> dict[str, Any]:
     return {"passed": ok, "seconds": round(ms / 1000, 1), "output": out}
 
 
+def submit_artifact(
+    ctx: RunContext[WorkerDeps],
+    name: str,
+    kind: ArtifactKind,
+    content: str = "",
+    path: str = "",
+) -> dict[str, Any]:
+    """Hand in a file that is not code, e.g. a test report or design notes. It is kept with
+    the task's evidence; it does not change the repo. Give content, or the path of a file
+    in the repo, not both.
+
+    Args:
+        name: file name to keep it under, e.g. test-report.md
+        kind: report | notes | design | log | other
+        content: the text to keep
+        path: repo-relative file to keep a copy of instead
+    """
+    d, c = ctx.deps, ctx.deps.caller
+    if not ARTIFACT_NAME.match(name):
+        raise ModelRetry("name: a plain file name like test-report.md (letters, digits, . _ -)")
+    if bool(content) == bool(path):
+        raise ModelRetry("give either content or path, not both and not neither")
+    if path:
+        p = d.resolve(path)
+        if not p.is_file():
+            raise ModelRetry(f"{path} does not exist; use list_files")
+        data = p.read_bytes()
+    else:
+        data = content.encode()
+    if len(data) > MAX_ARTIFACT_BYTES:
+        raise ModelRetry(f"too big: {len(data):,} bytes, limit {MAX_ARTIFACT_BYTES:,}")
+    sha, stored = d.ws.store_artifact(data)
+    art = _call(
+        d.orch.add_artifact,
+        c.task_id,
+        name=name,
+        kind=kind,
+        sha256=sha,
+        path=str(stored),
+        size=len(data),
+        run_id=c.run_id,
+        actor=c.agent,
+    )
+    return {"artifact": art, "name": name, "sha256": sha, "bytes": len(data)}
+
+
 def complete_task(ctx: RunContext[WorkerDeps], summary: str) -> dict[str, Any]:
     """Finish your task: your changes are committed and sent to the verifiers.
 
@@ -228,6 +277,7 @@ WORKER_TOOLS = [
     search_code,
     write_file,
     run_tests,
+    submit_artifact,
     complete_task,
     submit_review,
 ]

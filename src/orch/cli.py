@@ -24,6 +24,7 @@ from orch.paths import data_dir, db_path
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 
 DEFAULT_TEAM = Path("teams/fintech_sdlc.yaml")
+DEFAULT_BUDGET = 2.0
 TEMPLATE = Path(__file__).resolve().parents[2] / "examples" / "minibank"
 
 
@@ -67,6 +68,10 @@ def _orch() -> TaskOrchestrator:
     return TaskOrchestrator(open_db(db_path()))
 
 
+def _default_repo() -> Path:
+    return (data_dir() / "repos" / "minibank").resolve()
+
+
 def _criteria(items: list[str]) -> dict[str, str]:
     """--ac "text" or --ac "AC-7=text" -> {"AC-1": "text", ...}"""
     out: dict[str, str] = {}
@@ -108,6 +113,8 @@ class EventPrinter:
             line = f"asks a human: {p['prompt'][:90]}"
         elif e.type.startswith("workspace."):
             line = e.type.removeprefix("workspace.").replace("_", " ")
+        elif e.type == "artifact.added":
+            line = f"artifact {p['name']} ({p['kind']}, {p['bytes']:,} bytes)"
         elif e.type == "run.usage":
             line = f"usage {p['tokens']:,} tokens ${p['usd']:.4f}"
         else:
@@ -135,12 +142,19 @@ def run(
     ac: list[str] = typer.Option([], "--ac", help="Acceptance criterion; repeat for each"),
     resume: str = typer.Option("", help="Continue an objective: its root task id"),
     team: Path = typer.Option(DEFAULT_TEAM, help="Team YAML file"),
-    repo: Path = typer.Option(
-        None, help="Target git repo (default: <data dir>/repos/minibank, made from the template)"
+    repo: Path | None = typer.Option(
+        None,
+        help="Target git repo (default: <data dir>/repos/minibank, made from the template; "
+        "on --resume, the objective's own repo)",
     ),
-    parallel: int = typer.Option(3, help="Agents running at once"),
+    parallel: int = typer.Option(3, min=1, help="Agents running at once"),
     model_name: str = typer.Option("", "--model", help="Model for every agent"),
-    budget: float = typer.Option(2.0, help="Project budget in USD"),
+    budget: float | None = typer.Option(
+        None,
+        min=0.01,
+        help=f"Total USD budget for the repo's project, shared by all its objectives "
+        f"(new project: ${DEFAULT_BUDGET:.2f}; given again, it replaces the old budget)",
+    ),
     offline: bool = typer.Option(False, help="Scripted team, no network (transfers demo)"),
     interactive: bool = typer.Option(
         True, "--interactive/--no-interactive", help="Answer human requests in the terminal"
@@ -158,24 +172,40 @@ def run(
         raise typer.BadParameter(f"no price for {model_name}; add it to model.PRICES")
     orch = _orch()
     reg = TeamRegistry.load(team)
-    repo = (repo or data_dir() / "repos" / "minibank").resolve()
-    ws = Workspace.create(repo, data_dir() / "worktrees", template=TEMPLATE)
-    orch.recover()  # anything RUNNING was left by a runner that died
+    repo = repo.resolve() if repo else None
 
     if resume:
+        try:
+            pid = orch.get_task(resume)["project_id"]
+        except OrchestratorError as e:
+            raise typer.BadParameter(f"no objective {resume}") from e
+        saved = orch.get_project(pid)["repo_path"]
+        if repo and saved and repo != Path(saved):
+            raise typer.BadParameter(f"{resume} runs in {saved}, not {repo}")
+        repo = Path(saved) if saved else repo or _default_repo()
         root = resume
-        orch.register_team(orch.get_task(root)["project_id"], reg)  # pick up team edits
     else:
         if offline and not objective:
             objective, ac = TRANSFERS_OBJECTIVE, [f"{k}={v}" for k, v in TRANSFERS_CRITERIA.items()]
         if not objective:
             raise typer.BadParameter("give an objective, or --resume <root task id>")
-        pid = orch.project_by_name(repo.name) or orch.create_project(
-            repo.name, repo_path=str(repo), limits=ProjectLimits(budget_usd=budget)
-        )
-        orch.register_team(pid, reg)
+        repo = repo or _default_repo()
+        pid = orch.project_for_repo(str(repo))
+        if pid is None:
+            limits = ProjectLimits(budget_usd=budget or DEFAULT_BUDGET)
+            pid = orch.create_project(repo.name, repo_path=str(repo), limits=limits)
+            budget = None  # already set
+        root = ""
+    ws = Workspace.create(repo, data_dir() / "worktrees", template=TEMPLATE)
+    orch.register_team(pid, reg)  # on resume too: picks up team edits
+    if budget is not None:
+        orch.set_budget(pid, budget)
+    if not root:
         root = orch.create_root_task(pid, objective, acceptance_criteria=_criteria(ac))
+    orch.recover()  # anything RUNNING was left by a runner that died
+    money = orch.get_project(pid)
     typer.secho(f"objective {root} in {repo}", bold=True)
+    typer.echo(f"  budget ${money['budget_usd']:.2f}, spent ${money['spent_usd']:.4f} so far")
     orch.events.subscribe(EventPrinter(orch))
 
     model = scripted_team() if offline else meta_model(model_name)
@@ -278,6 +308,12 @@ def evidence_markdown(ev: dict[str, Any], chain_ok: bool, events: int) -> str:
         for f in r["findings"]:
             cite = f" ({f['criterion_id']})" if f.get("criterion_id") else ""
             lines.append(f"  - [{f['severity']}] {f['issue']}{cite}")
+    if ev["artifacts"]:
+        lines += ["", "## Artifacts", "", "| task | name | kind | sha256 |", "|---|---|---|---|"]
+        lines += [
+            f"| {a['task']} | {a['name']} | {a['kind']} | `{a['sha256'][:12]}` |"
+            for a in ev["artifacts"]
+        ]
     lines += ["", "## Human decisions", ""]
     for d in ev["decisions"]:
         lines.append(f"- {d['task']} ({d['kind']}): {d['response'] or d['status']}")

@@ -45,7 +45,9 @@ agents:
     prompt: |
       Write focused pytest tests, one or more per acceptance criterion you were given.
       Name tests after the criterion (test_ac1_...). Tests must fail before the feature exists
-      and must not depend on network or wall-clock time. Then complete_task.
+      and must not depend on network or wall-clock time. Then submit_artifact a short test plan
+      (name test-plan.md, kind notes) listing each criterion and the tests that cover it.
+      Then complete_task.
 
   - name: developer
     description: >-

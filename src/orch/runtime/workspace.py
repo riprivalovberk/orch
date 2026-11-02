@@ -10,6 +10,7 @@ files, so merges are clean. Once the objective is approved, obj/<root> merges in
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -38,9 +39,11 @@ class Merge:
 
 
 class Workspace:
-    def __init__(self, repo: Path, worktrees: Path) -> None:
+    def __init__(self, repo: Path, worktrees: Path, artifacts: Path | None = None) -> None:
         self.repo = repo.resolve()
         self.worktrees = worktrees.resolve()
+        # Files agents hand in that are not code (reports, notes), stored by content hash.
+        self.artifacts = (artifacts or self.worktrees.parent / "artifacts").resolve()
 
     @classmethod
     def create(cls, repo: Path, worktrees: Path, *, template: Path | None = None) -> Workspace:
@@ -54,6 +57,17 @@ class Workspace:
             git(repo, "commit", "-q", "-m", "Initial import")
         worktrees.mkdir(parents=True, exist_ok=True)
         return cls(repo, worktrees)
+
+    def store_artifact(self, data: bytes) -> tuple[str, Path]:
+        """Save bytes under their sha256; the same content is stored once."""
+        sha = hashlib.sha256(data).hexdigest()
+        path = self.artifacts / sha[:2] / sha
+        if not path.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_bytes(data)
+            tmp.replace(path)
+        return sha, path
 
     # ------------------------------------------------------------------ names
 

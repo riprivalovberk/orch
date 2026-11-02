@@ -43,8 +43,11 @@ uv run orch evidence <objective>       # audit pack: plans, gates, reviews, appr
 
 The target repo defaults to `.orch/repos/minibank`, made on first run from
 `examples/minibank/` (a tiny bank service with a protected `payments/` package); pass
-`--repo` for another git repo. Every agent uses `muse-spark-1.3-contributor` unless
-`--model` says otherwise.
+`--repo` for another git repo (`--resume` always continues in the objective's own repo).
+Each repo gets one project whose budget covers all its objectives: $2.00 to start,
+changed with `--budget`. Every agent uses `muse-spark-1.3-contributor` unless `--model`
+says otherwise. Workers can hand in non-code files (test reports, notes) with
+`submit_artifact`; they are stored by hash under `.orch/artifacts/` and listed in the evidence.
 
 Everything orch creates (databases, spike results, agent transcripts) goes in one folder,
 `.orch/` (gitignored; override with `ORCH_DATA_DIR`). Delete it any time with `uv run orch nuke` (or one part: `orch nuke db`, `orch nuke spike`,

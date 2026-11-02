@@ -63,7 +63,7 @@ Every call goes through one wrapper:
 | `read_file`, `list_files`, `search_code` | workers, reviewers | read-only in the worktree |
 | `write_file` | test_engineer, developers | `task_can_write(agent paths, task paths)` |
 | `run_tests` | test_engineer, developers | pytest in worktree, timeout, output tail |
-| `submit_artifact` | workers | file bytes stored by sha256 → `Artifact` row |
+| `submit_artifact` | workers | text, or a copy of a repo file, stored by sha256 under `.orch/artifacts/` → `Artifact` row; listed in the evidence; never changes the repo |
 | `complete_task` | workers | `orch.complete` (→ VERIFYING or DONE) |
 | `submit_review` | reviewer, security_reviewer | `orch.record_review` with the diff of the target |
 
@@ -126,6 +126,5 @@ Status (Nov 2026): all six steps are built and tested offline with a scripted te
 
 ## Not built yet
 
-- `submit_artifact` is on the team's allow-lists but not served (agents never see it).
 - Two efficiency cleanups from the step 1 review: `get_task_status` loads the whole tree,
   and each tool call makes four database round trips.

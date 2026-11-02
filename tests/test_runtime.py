@@ -299,3 +299,53 @@ def test_revision_without_changes_is_refused(
     monkeypatch.setattr(orch, "get_task", lambda tid: {**real(tid), "revision_round": 1})
     r = run(srv.call(c, "complete_task", {"summary": "no changes"}))
     assert r.is_error and "changed nothing" in r.content[0].text  # type: ignore[union-attr]
+
+
+def test_submit_artifact_stores_by_hash_and_shows_in_evidence(
+    orch: TaskOrchestrator, team: TeamRegistry, ws: Workspace, good_plan: Plan
+):
+    srv, c, _ = worker(orch, team, ws, good_plan)
+    note = {"name": "test-plan.md", "kind": "notes", "content": "# AC-1 covered\n"}
+    r = run(srv.call(c, "submit_artifact", note))
+    assert not r.is_error, r
+    sha = json.loads(r.content[0].text)["sha256"]  # type: ignore[union-attr]
+    assert (ws.artifacts / sha[:2] / sha).read_text() == "# AC-1 covered\n"
+
+    run(srv.call(c, "write_file", {"path": "tests/test_transfers.py", "content": "X = 1\n"}))
+    copy = {"name": "tests.py", "kind": "other", "path": "tests/test_transfers.py"}
+    assert not run(srv.call(c, "submit_artifact", copy)).is_error
+    assert ws.changed_files(c.task_id) == ["tests/test_transfers.py"]  # repo untouched
+
+    both = {"name": "x.md", "kind": "notes", "content": "a", "path": "tests/test_transfers.py"}
+    assert run(srv.call(c, "submit_artifact", both)).is_error
+    assert run(srv.call(c, "submit_artifact", {"name": "x.md", "kind": "notes"})).is_error
+    bad_name = {"name": "../x.md", "kind": "notes", "content": "a"}
+    assert run(srv.call(c, "submit_artifact", bad_name)).is_error
+
+    root = orch.get_task(c.task_id)["root_id"]
+    arts = orch.evidence(root)["artifacts"]
+    assert [(a["task"], a["name"]) for a in arts] == [
+        ("write_tests", "test-plan.md"),
+        ("write_tests", "tests.py"),
+    ]
+
+
+def test_cli_resume_uses_the_objectives_repo_and_budget_updates(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("ORCH_DATA_DIR", str(tmp_path / "data"))
+    cli = CliRunner()
+    repo = tmp_path / "bank"
+    r = cli.invoke(app, ["run", "--offline", "--no-interactive", "--repo", str(repo)])
+    assert r.exit_code == 0 and "budget $2.00" in r.output, r.output
+    inbox = cli.invoke(app, ["inbox"]).output
+    req, root = inbox.split()[0], inbox.split("objective ")[1].split(")")[0]
+    assert cli.invoke(app, ["approve", req]).exit_code == 0
+
+    other = cli.invoke(app, ["run", "--resume", root, "--repo", str(tmp_path / "x")])
+    assert other.exit_code != 0 and "runs in" in other.output, other.output
+    r = cli.invoke(app, ["run", "--resume", root, "--no-interactive", "--budget", "5"])
+    assert f"merged into main of {repo.resolve()}" in r.output, r.output
+    assert "budget $5.00" in r.output
+    assert (repo / "minibank" / "api" / "transfers.py").exists()
+    assert not (tmp_path / "data" / "repos" / "minibank").exists()
+
+    assert cli.invoke(app, ["run", "--offline", "--parallel", "0"]).exit_code != 0

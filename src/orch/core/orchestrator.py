@@ -24,6 +24,7 @@ from orch.core.state import IllegalTransition, assert_transition
 from orch.core.team import TeamRegistry
 from orch.db.models import (
     Agent,
+    Artifact,
     GateResult,
     HumanRequest,
     PlanRecord,
@@ -794,15 +795,78 @@ class TaskOrchestrator:
             )
             return [self._snapshot(s, t) for t in rows]
 
-    def project_by_name(self, name: str) -> str | None:
-        """The newest project with this name, so `orch run` reuses one per target repo."""
+    def project_for_repo(self, repo_path: str) -> str | None:
+        """The newest project for this target repo, so `orch run` reuses one per repo."""
         with self.tx() as s:
             return s.scalar(
                 select(Project.id)
-                .where(Project.name == name)
+                .where(Project.repo_path == repo_path)
                 .order_by(Project.created_at.desc())
                 .limit(1)
             )
+
+    def get_project(self, project_id: str) -> dict[str, Any]:
+        with self.tx() as s:
+            p = self._project(s, project_id)
+            return {
+                "id": p.id,
+                "name": p.name,
+                "repo_path": p.repo_path,
+                "budget_usd": p.limits.budget_usd,
+                "spent_usd": round(p.spent_usd, 6),
+            }
+
+    def set_budget(self, project_id: str, budget_usd: float) -> None:
+        """Change a project's total budget. It covers every objective run on the project."""
+        if budget_usd <= 0:
+            raise InvalidOperation("the budget must be more than $0")
+        with self.tx() as s:
+            p = self._project(s, project_id)
+            old = p.limits.budget_usd
+            p.limits = p.limits.model_copy(update={"budget_usd": budget_usd})
+            self.events.append(
+                s,
+                project_id=p.id,
+                type="project.budget",
+                actor=HUMAN,
+                payload={"from": old, "to": budget_usd},
+            )
+
+    def add_artifact(
+        self,
+        task_id: str,
+        *,
+        name: str,
+        kind: str,
+        sha256: str,
+        path: str,
+        size: int,
+        run_id: str | None = None,
+        actor: str | None = None,
+    ) -> str:
+        """Index a file an agent produced; the bytes are already stored at ``path``."""
+        with self.tx() as s:
+            t = self._task(s, task_id)
+            a = Artifact(
+                id=new_id("art"),
+                project_id=t.project_id,
+                task_id=t.id,
+                run_id=run_id,
+                name=name,
+                kind=kind,
+                sha256=sha256,
+                path=path,
+            )
+            s.add(a)
+            self._event(
+                s,
+                t,
+                "artifact.added",
+                {"name": name, "kind": kind, "sha256": sha256, "bytes": size},
+                run_id=run_id,
+                actor=actor or t.assignee or SYSTEM,
+            )
+            return a.id
 
     def project_ids(self) -> list[str]:
         with self.tx() as s:
@@ -887,6 +951,9 @@ class TaskOrchestrator:
                 .order_by(HumanRequest.created_at)
             )
             runs = s.scalars(select(Run).where(Run.task_id.in_(ids)))
+            artifacts = s.scalars(
+                select(Artifact).where(Artifact.task_id.in_(ids)).order_by(Artifact.created_at)
+            )
             node = {t.id: t.plan_node_id or "objective" for t in tasks}
             return {
                 "project_id": root.project_id,
@@ -932,6 +999,16 @@ class TaskOrchestrator:
                         "response": h.response,
                     }
                     for h in humans
+                ],
+                "artifacts": [
+                    {
+                        "task": node[a.task_id] if a.task_id else "-",
+                        "name": a.name,
+                        "kind": a.kind,
+                        "sha256": a.sha256,
+                        "path": a.path,
+                    }
+                    for a in artifacts
                 ],
                 "cost_usd": round(sum(r.cost_usd for r in runs), 6),
             }

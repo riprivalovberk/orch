@@ -37,6 +37,7 @@ packages = ["src/orch"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = ["live: calls the real model API and costs credit; run with ORCH_LIVE=1"]
 
 [tool.ruff]
 line-length = 100

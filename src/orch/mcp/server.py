@@ -33,8 +33,10 @@ from starlette.requests import Request
 
 from orch.core.orchestrator import OrchestratorError, TaskOrchestrator
 from orch.ids import new_id
+from orch.mcp.worker_tools import WORKER_TOOLS, WorkerDeps
 from orch.runtime import pm_tools as pm
 from orch.runtime.pm_tools import PMDeps
+from orch.runtime.workspace import Workspace
 
 NAME = "orch-agent-mcp"
 #: Clients put the model's tool-call id here (request ``_meta``) to make a call idempotent.
@@ -54,6 +56,17 @@ class Caller:
     agent: str
     kind: str
     tools: frozenset[str]
+    write_paths: tuple[str, ...] = ()  # the agent's scope (team file)
+    paths: tuple[str, ...] = ()  # what the plan says this task writes
+
+
+@dataclass(frozen=True)
+class Call:
+    """One tool call's context: the caller and what the server can reach for it."""
+
+    orch: TaskOrchestrator
+    caller: Caller
+    ws: Workspace | None
 
 
 @dataclass(frozen=True)
@@ -62,37 +75,64 @@ class ToolSpec:
     description: str
     input_schema: dict[str, Any]
     validator: SchemaValidator  # the same argument validation Pydantic AI does in-process
-    impl: Callable[..., Any]  # do_*(PMDeps, **validated args)
+    impl: Callable[..., Any]  # impl(deps, **validated args)
+    deps: Callable[[Call], Any]  # the deps impl takes, built for this call
 
 
 class Denied(Exception):
     """The caller may not make this call (bad token, tool not on its allow-list)."""
 
 
-def _pm(c: Caller, o: TaskOrchestrator) -> PMDeps:
-    return PMDeps(o, c.project_id, c.task_id, c.run_id)
+def pm_deps(call: Call) -> PMDeps:
+    c = call.caller
+    return PMDeps(call.orch, c.project_id, c.task_id, c.run_id)
 
 
-def _spec(fn: Callable[..., Any], impl: Callable[..., Any]) -> ToolSpec:
+def worker_deps(call: Call) -> WorkerDeps:
+    if call.ws is None:
+        raise ModelRetry("this server has no workspace; file tools are unavailable")
+    return WorkerDeps(call.orch, call.caller, call.ws)
+
+
+@dataclass(frozen=True)
+class _Ctx:
+    """Stands in for Pydantic AI's RunContext: the tools only read ``ctx.deps``."""
+
+    deps: Any
+
+
+def _spec(
+    fn: Callable[..., Any], deps: Callable[[Call], Any], impl: Callable[..., Any] | None = None
+) -> ToolSpec:
     """Name, description, schema and validator from the Pydantic AI tool, so MCP matches
-    the spike exactly."""
+    what an in-process agent would see. Without ``impl`` the tool function itself runs."""
     t = Tool(fn, takes_ctx=True)
     d = t.tool_def
+
+    def run_fn(dep: Any, **kw: Any) -> Any:
+        return fn(_Ctx(dep), **kw)
+
     return ToolSpec(
-        d.name, d.description or "", d.parameters_json_schema, t.function_schema.validator, impl
+        d.name,
+        d.description or "",
+        d.parameters_json_schema,
+        t.function_schema.validator,
+        impl or run_fn,
+        deps,
     )
 
 
 TOOLS: dict[str, ToolSpec] = {
     s.name: s
     for s in [
-        _spec(pm.list_agents, pm.do_list_agents),
-        _spec(pm.validate_plan, pm.do_validate_plan),
-        _spec(pm.submit_plan, pm.do_submit_plan),
-        _spec(pm.get_task_status, pm.do_get_task_status),
-        _spec(pm.get_task_tree, pm.do_get_task_tree),
-        _spec(pm.get_remaining_budget, pm.do_get_remaining_budget),
-        _spec(pm.request_human_input, pm.do_request_human_input),
+        _spec(pm.list_agents, pm_deps, pm.do_list_agents),
+        _spec(pm.validate_plan, pm_deps, pm.do_validate_plan),
+        _spec(pm.submit_plan, pm_deps, pm.do_submit_plan),
+        _spec(pm.get_task_status, pm_deps, pm.do_get_task_status),
+        _spec(pm.get_task_tree, pm_deps, pm.do_get_task_tree),
+        _spec(pm.get_remaining_budget, pm_deps, pm.do_get_remaining_budget),
+        _spec(pm.request_human_input, pm_deps, pm.do_request_human_input),
+        *(_spec(fn, worker_deps) for fn in WORKER_TOOLS),
     ]
 }
 
@@ -122,8 +162,14 @@ def _result(payload: Any, *, error: bool = False) -> types.CallToolResult:
 class AgentMCP:
     """Turns MCP requests from agents into orchestrator calls for the caller's run."""
 
-    def __init__(self, orch: TaskOrchestrator, tools: Mapping[str, ToolSpec] = TOOLS):
+    def __init__(
+        self,
+        orch: TaskOrchestrator,
+        ws: Workspace | None = None,
+        tools: Mapping[str, ToolSpec] = TOOLS,
+    ):
         self.orch = orch
+        self.ws = ws
         self.tools = dict(tools)
         self.server: Server[Any] = Server(
             NAME,
@@ -148,6 +194,8 @@ class AgentMCP:
             agent=who["agent"],
             kind=who["kind"],
             tools=frozenset(who["tools"]),
+            write_paths=tuple(who["write_paths"]),
+            paths=tuple(who["paths"]),
         )
 
     def allowed(self, c: Caller) -> list[ToolSpec]:
@@ -202,7 +250,8 @@ class AgentMCP:
         self, c: Caller, spec: ToolSpec, key: str, args: dict[str, Any]
     ) -> tuple[str, Any]:
         try:
-            out = spec.impl(_pm(c, self.orch), **spec.validator.validate_python(args))
+            kwargs = spec.validator.validate_python(args)
+            out = spec.impl(spec.deps(Call(self.orch, c, self.ws)), **kwargs)
             status = "ok"
         except (ModelRetry, OrchestratorError, ValidationError) as e:
             status, out = "error", e.message if isinstance(e, ModelRetry) else str(e)
@@ -222,7 +271,9 @@ class AgentMCP:
 
 
 @asynccontextmanager
-async def serve(orch: TaskOrchestrator, *, port: int = 0) -> AsyncIterator[str]:
+async def serve(
+    orch: TaskOrchestrator, ws: Workspace | None = None, *, port: int = 0
+) -> AsyncIterator[str]:
     """Run the agent MCP server on 127.0.0.1 for the duration of the block; yields its URL.
 
     port=0 picks a free port, so parallel runs (and tests) never collide.
@@ -232,7 +283,7 @@ async def serve(orch: TaskOrchestrator, *, port: int = 0) -> AsyncIterator[str]:
         sock.bind(("127.0.0.1", port))
         url = f"http://127.0.0.1:{sock.getsockname()[1]}/mcp"
         config = uvicorn.Config(
-            AgentMCP(orch).app(),
+            AgentMCP(orch, ws).app(),
             log_level="warning",
             lifespan="on",
             # An agent that never closes its stream (killed mid-run) must not hold up shutdown.

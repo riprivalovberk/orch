@@ -73,15 +73,18 @@ real server and compare.
 
 ## Workspace
 
-- The target app is `minibank/` inside this repo (a small Python service with a
-  `payments/` package), still to be written.
+- The target app's source lives in this repo at `examples/minibank/` (a small
+  standard-library Python service with a `payments/` package). `orch run` copies it into
+  its own git repo, `.orch/repos/minibank`, so agent branches never touch orch's history
+  and the team's paths (`minibank/**`, `tests/**`) are relative to that repo's root.
 - Each objective gets a branch, `orch/<root task id>`, made from `main`.
 - **Parallel from day one:** each claimed test/implement task gets its **own git worktree**
   under `.orch/worktrees/<task id>`, on a branch made from the objective branch's current
   head. The runner records that base commit.
 - Reviewers and gates run in the work task's worktree and see `git diff <base>`.
 - When a work task becomes DONE, the runner merges its branch into the objective branch.
-  A merge conflict reopens the task with the conflict as a finding (one try), then fails it.
+  A merge conflict stops the run with the conflict and the folder to resolve it in
+  (a DONE work task can't be reopened by the state machine; PAR-001 makes this rare).
 - Conflicts are mostly prevented up front: every node already declares `paths`. New
   validator rule **PAR-001**: two work nodes that can run at the same time (no `blocks`
   path between them) must not have overlapping `paths`. The PM gets the error and adds an
@@ -101,7 +104,7 @@ real server and compare.
 
 ## Build order
 
-1. `orch/mcp/server.py`: FastMCP app, auth wrapper, PM tools only. Test: spike `--mcp
+1. `orch/mcp/server.py`: MCP SDK low-level server, auth wrapper, PM tools only. Test: spike `--mcp
    --offline` passes the same as in-process.
 2. Runner loop + `orch run` with the PM only (stops at WAITING).
 3. Worktree per task + merge back + PAR-001; worker tools (`read/list/search/write_file`,
@@ -110,14 +113,19 @@ real server and compare.
 5. Human CLI (`inbox/answer/approve`) and `evidence`.
 6. `minibank` target repo + the demo objective end to end, live on muse-spark.
 
+Status (Nov 2026): all six steps are built and tested offline with a scripted team
+(`orch run --offline`, `tests/test_runtime.py`).
+
 ## Decisions
 
-1. Target app lives in this repo as `minibank/` (name open — see below).
+1. Target app source lives in this repo at `examples/minibank/`; name kept.
 2. Parallel work from the start (worktree per task, PAR-001).
 3. Every agent uses the cheapest model, `muse-spark-1.3-contributor` (already the default).
+4. The policy gate checks that every changed file is inside the task's planned paths and
+   the agent's write_paths, and that no secrets (keys, passwords) were added.
 
-## Open questions
+## Not built yet
 
-1. **Name of the target app.** `minibank` is a placeholder: a tiny bank service so the
-   payments rules (PAY-001, security review) have real code to bite on. It appears in the
-   team YAML `write_paths` and the example plans, so renaming is a find-and-replace.
+- `submit_artifact` is on the team's allow-lists but not served (agents never see it).
+- Two efficiency cleanups from the step 1 review: `get_task_status` loads the whole tree,
+  and each tool call makes four database round trips.

@@ -474,6 +474,8 @@ class TaskOrchestrator:
                 "agent": t.assignee,
                 "kind": t.kind,
                 "tools": list(agent.tools) if agent else [],
+                "write_paths": list(agent.write_paths) if agent else [],
+                "paths": list(t.paths),
             }
 
     def begin_tool_call(
@@ -792,6 +794,148 @@ class TaskOrchestrator:
             )
             return [self._snapshot(s, t) for t in rows]
 
+    def project_by_name(self, name: str) -> str | None:
+        """The newest project with this name, so `orch run` reuses one per target repo."""
+        with self.tx() as s:
+            return s.scalar(
+                select(Project.id)
+                .where(Project.name == name)
+                .order_by(Project.created_at.desc())
+                .limit(1)
+            )
+
+    def project_ids(self) -> list[str]:
+        with self.tx() as s:
+            return list(s.scalars(select(Project.id).order_by(Project.created_at)))
+
+    def verified_targets(self, verifier_id: str) -> list[str]:
+        """The work task(s) a gate or review checks."""
+        with self.tx() as s:
+            return [t.id for t in self._verified_targets(s, verifier_id)]
+
+    def feedback(self, task_id: str) -> dict[str, Any]:
+        """What the verifiers said last round, for a work task that was sent back."""
+        with self.tx() as s:
+            t = self._task(s, task_id)
+            last = t.revision_round - 1
+            if last < 0:
+                return {"reviews": [], "gates": []}
+            reviews = s.scalars(
+                select(Review).where(Review.target_task_id == t.id, Review.round == last)
+            )
+            gates = s.scalars(
+                select(GateResult).where(
+                    GateResult.target_task_id == t.id,
+                    GateResult.round == last,
+                    GateResult.passed.is_(False),
+                )
+            )
+            return {
+                "reviews": [
+                    {
+                        "reviewer": r.reviewer,
+                        "verdict": r.verdict,
+                        "summary": r.summary,
+                        "findings": [f.model_dump(exclude_none=True) for f in r.findings],
+                    }
+                    for r in reviews
+                ],
+                "gates": [{"gate": g.gate, "output": g.output[-4000:]} for g in gates],
+            }
+
+    def human_answers(self, task_id: str) -> list[dict[str, str]]:
+        """Questions this task asked and what the person answered, oldest first."""
+        with self.tx() as s:
+            rows = s.scalars(
+                select(HumanRequest)
+                .where(HumanRequest.task_id == task_id, HumanRequest.status == "answered")
+                .order_by(HumanRequest.created_at)
+            )
+            return [{"question": r.prompt, "answer": r.response or ""} for r in rows]
+
+    def log_event(
+        self, task_id: str, type: str, payload: dict[str, Any], *, actor: str = SYSTEM
+    ) -> None:
+        """A runtime event about a task (merge, worktree, gate output) on the same chain."""
+        with self.tx() as s:
+            self._event(s, self._task(s, task_id), type, payload, actor=actor)
+
+    def evidence(self, root_id: str) -> dict[str, Any]:
+        """Everything an auditor needs for one objective: plans, tasks, verdicts, decisions."""
+        with self.tx() as s:
+            root = self._task(s, root_id)
+            tasks = s.scalars(
+                select(Task).where(Task.root_id == root.id).order_by(Task.depth, Task.created_at)
+            ).all()
+            ids = [t.id for t in tasks]
+            plans = s.scalars(
+                select(PlanRecord)
+                .where(PlanRecord.root_task_id == root.id)
+                .order_by(PlanRecord.version)
+            )
+            reviews = s.scalars(
+                select(Review).where(Review.target_task_id.in_(ids)).order_by(Review.round)
+            )
+            gates = s.scalars(
+                select(GateResult)
+                .where(GateResult.target_task_id.in_(ids))
+                .order_by(GateResult.round, GateResult.gate)
+            )
+            humans = s.scalars(
+                select(HumanRequest)
+                .where(HumanRequest.task_id.in_(ids))
+                .order_by(HumanRequest.created_at)
+            )
+            runs = s.scalars(select(Run).where(Run.task_id.in_(ids)))
+            node = {t.id: t.plan_node_id or "objective" for t in tasks}
+            return {
+                "project_id": root.project_id,
+                "root": self._snapshot(s, root),
+                "objective": root.objective,
+                "criteria": root.acceptance_criteria or {},
+                "plans": [
+                    {
+                        "version": p.version,
+                        "valid": p.valid,
+                        "errors": [str(e) for e in p.errors],
+                        "spec": p.spec.model_dump(mode="json") if p.valid else None,
+                    }
+                    for p in plans
+                ],
+                "tasks": [self._snapshot(s, t) for t in tasks],
+                "reviews": [
+                    {
+                        "target": node[r.target_task_id],
+                        "reviewer": r.reviewer,
+                        "round": r.round,
+                        "verdict": r.verdict,
+                        "summary": r.summary,
+                        "findings": [f.model_dump(exclude_none=True) for f in r.findings],
+                    }
+                    for r in reviews
+                ],
+                "gates": [
+                    {
+                        "target": node[g.target_task_id],
+                        "round": g.round,
+                        "gate": g.gate,
+                        "passed": g.passed,
+                    }
+                    for g in gates
+                ],
+                "decisions": [
+                    {
+                        "task": node[h.task_id],
+                        "kind": h.kind,
+                        "prompt": h.prompt,
+                        "status": h.status,
+                        "response": h.response,
+                    }
+                    for h in humans
+                ],
+                "cost_usd": round(sum(r.cost_usd for r in runs), 6),
+            }
+
     def verify_events(self, project_id: str) -> VerifyResult:
         """Re-hash this project's event chain; reports the first tampered event, if any."""
         with self.tx() as s:
@@ -867,6 +1011,8 @@ class TaskOrchestrator:
         ]
         return {
             "id": t.id,
+            "project_id": t.project_id,
+            "root_id": t.root_id,
             "node": t.plan_node_id,
             "kind": t.kind,
             "title": t.title,
@@ -874,6 +1020,7 @@ class TaskOrchestrator:
             "outcome": t.outcome,
             "assignee": t.assignee,
             "paths": t.paths,
+            "gates": t.gates,
             "parent_id": t.parent_id,
             "attempt": t.attempt,
             "revision_round": t.revision_round,

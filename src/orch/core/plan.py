@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections import defaultdict, deque
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
+from fnmatch import fnmatchcase
 from graphlib import CycleError, TopologicalSorter
 
 from orch.core.team import TeamRegistry
@@ -254,11 +255,39 @@ def str_005_shapes(g: PlanGraph, ctx: ValidationContext) -> Iterable[PlanError]:
             )
 
 
+def _overlap(a: str, b: str) -> bool:
+    """Two paths or globs that could name the same file."""
+    return a == b or fnmatchcase(a, b) or fnmatchcase(b, a)
+
+
+def par_001_parallel_writes(g: PlanGraph, ctx: ValidationContext) -> Iterable[PlanError]:
+    """Work nodes that can run at the same time must not write the same files.
+
+    Each runs in its own worktree and is merged when done, so overlapping paths would
+    conflict at merge time. Two nodes are ordered if either is reachable from the other.
+    """
+    writers = [n for n in g.of_kind(TaskKind.TEST, TaskKind.IMPLEMENT) if n.paths]
+    reach = {n.id: g.reachable_from(n.id) for n in writers}
+    for i, a in enumerate(writers):
+        for b in writers[i + 1 :]:
+            if b.id in reach[a.id] or a.id in reach[b.id]:
+                continue
+            shared = sorted({p for p in a.paths for q in b.paths if _overlap(p, q)})
+            if shared:
+                yield err(
+                    "PAR-001",
+                    b.id,
+                    f"{a.id} and {b.id} can run at the same time and both write {shared[0]}",
+                    f"add a blocks edge from {a.id} to {b.id}, or give them separate paths",
+                )
+
+
 STRUCTURAL_RULES: tuple[Rule, ...] = (
     str_001_acyclic,
     str_003_assignees,
     str_004_limits,
     str_005_shapes,
+    par_001_parallel_writes,
 )
 
 

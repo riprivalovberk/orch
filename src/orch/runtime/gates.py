@@ -5,6 +5,7 @@ Each runs in the worktree of the work task being verified and returns a GateResu
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -30,7 +31,9 @@ SECRET_PATTERNS = {
 def _run(cmd: list[str], cwd: Path, *, timeout: float = TIMEOUT_S) -> tuple[int, str, int]:
     t0 = time.monotonic()
     try:
-        p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+        # No __pycache__ in the worktree: the policy gate would count it as a changed file.
+        env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+        p = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout)
         code, out = p.returncode, p.stdout + p.stderr
     except subprocess.TimeoutExpired as e:
         code, out = -1, f"timed out after {timeout:.0f}s\n{e.stdout or ''}"
@@ -46,6 +49,23 @@ def pytest(cwd: Path, *args: str, timeout: float = TIMEOUT_S) -> tuple[bool, str
     if code == 5:  # pytest: no tests collected
         out += "\nno tests were collected"
     return code == 0, out, ms
+
+
+def ruff_tidy(cwd: Path, paths: Iterable[str]) -> list[str]:
+    """Format and sort imports in these files; return the ones that changed.
+
+    Only layout changes, never behaviour: an agent's code is formatted the same way whatever
+    order the tests and the package were written in. Anything else ruff finds stays the
+    agent's to fix.
+    """
+    paths = list(paths)
+    if not paths:
+        return []
+    before = {p: (cwd / p).read_bytes() for p in paths}
+    ruff = [sys.executable, "-m", "ruff"]
+    _run([*ruff, "check", "--no-cache", "--select", "I", "--fix", "--exit-zero", *paths], cwd)
+    _run([*ruff, "format", "--no-cache", *paths], cwd)
+    return [p for p in paths if (cwd / p).read_bytes() != before[p]]
 
 
 def ruff(cwd: Path, *paths: str) -> tuple[bool, str, int]:

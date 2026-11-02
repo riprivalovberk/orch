@@ -57,6 +57,28 @@ Everything orch creates (databases, spike results, agent transcripts) goes in on
 `.orch/` (gitignored; override with `ORCH_DATA_DIR`). Delete it any time with `uv run orch nuke` (or one part: `orch nuke db`, `orch nuke spike`,
 `orch nuke repos`).
 
+## Web UI
+
+```bash
+uv run orch ui                         # http://127.0.0.1:8765
+```
+
+Each project opens as a chat with the PM. Ask it about the project (where code is, what an
+objective changed, why a check failed: it reads main and every objective's branch), or say
+what to build: it starts an objective, drafts acceptance criteria with you, then posts its
+plan and the team's progress in the thread. Its questions, the final approval and any escalation arrive as messages you
+answer in place (answering resumes the run). A collapsible Files panel on the right lists the
+repo's files, previews them and uploads new ones (committed to `main`, so every new
+objective's agents can read them).
+
+New projects start as an empty Python project in their own folder (pick the minibank sample
+for the offline demo). Everything else is on the project's details page and the top bar:
+budget, objectives with their tasks, gates, reviews, diffs and evidence pack, the filtered
+event log, the event-chain check, the team, plan check, clean-up and the model API key
+(Admin; saved to `.env`). Runs started in the UI
+go in background threads of the UI process; events are read from the database, so
+`orch run` runs show too.
+
 ## Layout
 
 ```
@@ -68,6 +90,7 @@ src/orch/
   mcp/           the agent MCP server (run-token identity, tool allow-lists) + worker tools
   runtime/       runner, git workspace, gates, Meta Model API wiring, PM tools, spike,
                  scripted team (--offline)
+  web/           the web UI (orch ui): Starlette JSON API + one HTML page
   paths.py       the one data folder (.orch/)
 teams/           the agent team (YAML)
 examples/        sample plans; minibank/ (the target app template)

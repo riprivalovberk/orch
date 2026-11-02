@@ -227,11 +227,13 @@ def complete_task(ctx: RunContext[WorkerDeps], summary: str) -> dict[str, Any]:
     """
     d, c = ctx.deps, ctx.deps.caller
     sha = None
+    tidied: list[str] = []
     if d.writes:
         # Cheap checks the gates would fail anyway: catch them here, while the agent can fix
         # them, instead of spending a review round on them.
         changed = d.ws.changed_files(c.task_id)
         py = [f for f in changed if f.endswith(".py") and (d.root() / f).exists()]
+        tidied = gates.ruff_tidy(d.root(), py)
         if py:
             ok, out, _ = gates.ruff(d.root(), *py)
             if not ok:
@@ -247,6 +249,7 @@ def complete_task(ctx: RunContext[WorkerDeps], summary: str) -> dict[str, Any]:
     return {
         "status": status,
         "commit": sha,
+        "formatted": tidied,
         "next": "Done. Reply with one line and make no more calls.",
     }
 

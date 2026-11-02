@@ -15,6 +15,7 @@ dependencies = [
     "pydantic-ai-slim[mcp,openai]>=1.0",
     "mcp>=1.10",
     "uvicorn>=0.30",
+    "python-multipart>=0.0.9",
 ]
 
 [project.scripts]
@@ -22,6 +23,7 @@ orch = "orch.cli:app"
 
 [dependency-groups]
 dev = [
+    "httpx>=0.28.1",
     "pandas>=3.1.0",
     "pyright>=1.1.414",
     "pytest>=8",

@@ -309,3 +309,16 @@ def test_review_may_block_on_an_engineering_standard(orch, team, good_plan):
     (review,) = orch.evidence(root)["reviews"]
     assert review["verdict"] == "request_changes"
     assert review["findings"][0]["criterion_id"] == "STD-001"
+
+
+def test_canceling_an_objective_cancels_its_tasks(orch, team, good_plan):
+    pid, root, ids = planned(orch, team, good_plan)
+    start(orch, ids["write_tests"])
+    orch.complete(ids["write_tests"], "4 tests")
+    start(orch, ids["implement_transfer"])
+    assert orch.complete(ids["implement_transfer"], "done") == S.VERIFYING
+
+    assert orch.cancel(root, "stuck") == S.CANCELED
+    assert st(orch, ids["write_tests"]) == S.DONE  # finished work stays finished
+    for node in ("implement_transfer", "gates", "review_transfer", "approve"):
+        assert st(orch, ids[node]) == S.CANCELED, node

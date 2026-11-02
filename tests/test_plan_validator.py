@@ -77,6 +77,18 @@ def test_cycle_is_str_001(good_plan, team):
     assert "STR-001" in codes(check(p, team))
 
 
+def test_gate_verifying_tests_and_impl_is_str_006(good_plan, team):
+    # the positions-rec deadlock: write_tests waits for gates, gates waits for
+    # implement_transfer, implement_transfer waits for write_tests
+    p = edit(good_plan, add_edges=[["write_tests", "gates", "verifies"]])
+    errors = [e for e in check(p, team) if e.code == "STR-006"]
+    assert len(errors) == 1 and errors[0].node == "gates"
+    assert {"write_tests", "implement_transfer"} <= set(
+        errors[0].message.split(": ")[1].split(", ")
+    )
+    assert "STR-001" not in codes(check(p, team))  # the edges alone have no cycle
+
+
 def test_dangling_edge_short_circuits(good_plan, team):
     errors = check(edit(good_plan, add_edges=[["ghost", "approve"]]), team)
     assert codes(errors) == ["STR-002"]

@@ -341,6 +341,24 @@ def evidence(
         raise typer.Exit(1)
 
 
+@app.command()
+def ui(
+    host: str = typer.Option("127.0.0.1", help="Address to listen on"),
+    port: int = typer.Option(8765, help="Port"),
+    team: Path = typer.Option(DEFAULT_TEAM, help="Team YAML file"),
+) -> None:
+    """The web UI: create projects, run objectives, watch events, answer the inbox."""
+    import uvicorn
+
+    from orch.web.server import create_app
+
+    web = create_app(
+        _orch(), team_path=team.resolve(), template=TEMPLATE, default_budget=DEFAULT_BUDGET
+    )
+    typer.secho(f"orch ui on http://{host}:{port}  (data in {data_dir()})", bold=True)
+    uvicorn.run(web, host=host, port=port, log_level="warning")
+
+
 NUKE_SECTIONS = ("all", "db", "spike", "repos")
 
 

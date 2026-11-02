@@ -147,6 +147,35 @@ def str_001_acyclic(g: PlanGraph, ctx: ValidationContext) -> Iterable[PlanError]
         )
 
 
+def str_006_no_deadlock(g: PlanGraph, ctx: ValidationContext) -> Iterable[PlanError]:
+    """No task may end up waiting on itself through verification.
+
+    STR-001 only sees edges. At run time a task waits at two points: it starts once its
+    blocks sources are DONE and its verifies sources are submitted, and it is DONE once
+    its own verifiers are. So a verifier checking both a task and something that task
+    blocks never runs: e.g. tests -> impl (blocks) with a gate verifying both.
+    """
+    deps: dict[tuple[str, str], list[tuple[str, str]]] = {}
+    for n in g.nodes:
+        deps[(n, "start")] = [
+            (e.source, "done" if e.kind == EdgeKind.BLOCKS else "start") for e in g.inc[n]
+        ]
+        deps[(n, "done")] = [(n, "start")] + [(v.id, "done") for v in g.verifiers_of(n)]
+    try:
+        TopologicalSorter(deps).prepare()
+    except CycleError as exc:
+        cycle: list[tuple[str, str]] = exc.args[1]
+        names = list(dict.fromkeys(node for node, _ in cycle))
+        verifier = next((n for n in names if g.nodes[n].kind in VERIFIER_KINDS), names[0])
+        yield err(
+            "STR-006",
+            verifier,
+            "these tasks would wait on each other forever: " + ", ".join(names),
+            f"{verifier} cannot verify a task and also work that task blocks; give each "
+            "its own verifier, or verify only the later work",
+        )
+
+
 def str_003_assignees(g: PlanGraph, ctx: ValidationContext) -> Iterable[PlanError]:
     for n in g.nodes.values():
         if n.kind in UNASSIGNED_KINDS:
@@ -287,6 +316,7 @@ STRUCTURAL_RULES: tuple[Rule, ...] = (
     str_003_assignees,
     str_004_limits,
     str_005_shapes,
+    str_006_no_deadlock,
     par_001_parallel_writes,
 )
 

@@ -289,6 +289,20 @@ def test_complete_task_refuses_lint_errors_and_empty_revisions(
     assert orch.get_task(c.task_id)["status"] == TaskStatus.RUNNING
 
 
+def test_complete_task_formats_and_sorts_imports_itself(
+    orch: TaskOrchestrator, team: TeamRegistry, ws: Workspace, good_plan: Plan
+):
+    srv, c, _ = worker(orch, team, ws, good_plan)
+    messy = "import sys\nimport os\nPATHS=[os.sep,sys.argv[0]]\n"
+    run(srv.call(c, "write_file", {"path": "tests/test_transfers.py", "content": messy}))
+    r = run(srv.call(c, "complete_task", {"summary": "tests"}))
+    assert not r.is_error, r.content[0].text  # type: ignore[union-attr]
+    assert "tests/test_transfers.py" in r.content[0].text  # type: ignore[union-attr]
+    tidy = (ws.task_dir(c.task_id) / "tests/test_transfers.py").read_text()
+    assert tidy == "import os\nimport sys\n\nPATHS = [os.sep, sys.argv[0]]\n"
+    assert orch.get_task(c.task_id)["status"] != TaskStatus.RUNNING
+
+
 def test_revision_without_changes_is_refused(
     orch: TaskOrchestrator, team: TeamRegistry, ws: Workspace, good_plan: Plan, monkeypatch
 ):

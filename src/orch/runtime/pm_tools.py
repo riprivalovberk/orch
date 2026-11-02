@@ -125,7 +125,9 @@ def submit_plan(ctx: RunContext[PMDeps], plan: Plan) -> dict[str, Any]:
     """Submit the whole plan. It is validated again; if accepted, the team starts work.
 
     Edges: `blocks` means the target waits for the source to finish; `verifies` points
-    from a work node to a gate/review/security_review node that checks it. Test and
+    from a work node to a gate/review/security_review node that checks it; a work node
+    finishes only once its verifiers pass, so never have one verifier check both a node
+    and work that node blocks (point it at the later work only). Test and
     implement nodes list `paths`: the files or globs they will write.
     """
     return do_submit_plan(ctx.deps, plan)

@@ -25,6 +25,7 @@ from orch.core.team import TeamRegistry
 from orch.db.models import (
     Agent,
     Artifact,
+    Event,
     GateResult,
     HumanRequest,
     PlanRecord,
@@ -561,6 +562,22 @@ class TaskOrchestrator:
                 actor=t.assignee or SYSTEM,
             )
 
+    def record_chat_usage(
+        self, project_id: str, *, actor: str, tokens: int = 0, cost_usd: float = 0.0
+    ) -> None:
+        """Model usage outside any task (the PM answering in the chat), charged to the project."""
+        with self.tx() as s:
+            p = self._project(s, project_id)
+            p.spent_usd += cost_usd
+            p.spent_tokens += tokens
+            self.events.append(
+                s,
+                project_id=p.id,
+                type="chat.usage",
+                actor=actor,
+                payload={"tokens": tokens, "usd": cost_usd},
+            )
+
     # ------------------------------------------------------------------ agent actions
 
     def complete(self, task_id: str, summary: str, *, actor: str | None = None) -> str:
@@ -819,6 +836,11 @@ class TaskOrchestrator:
                 "spent_usd": round(p.spent_usd, 6),
             }
 
+    def get_project_pm(self, project_id: str) -> str:
+        """The name of the project's PM agent (who speaks for the team in the chat)."""
+        with self.tx() as s:
+            return self._project(s, project_id).pm_agent or SYSTEM
+
     def set_budget(self, project_id: str, budget_usd: float) -> None:
         """Change a project's total budget. It covers every objective run on the project."""
         if budget_usd <= 0:
@@ -875,6 +897,60 @@ class TaskOrchestrator:
         with self.tx() as s:
             return list(s.scalars(select(Project.id).order_by(Project.created_at)))
 
+    def objectives(self, project_id: str) -> list[dict[str, Any]]:
+        """The project's root tasks, newest first, with their criteria."""
+        with self.tx() as s:
+            rows = s.scalars(
+                select(Task)
+                .where(Task.project_id == project_id, Task.id == Task.root_id)
+                .order_by(Task.created_at.desc())
+            )
+            return [
+                {
+                    **self._snapshot(s, t),
+                    "objective": t.objective,
+                    "criteria": t.acceptance_criteria or {},
+                    "created_at": t.created_at,
+                }
+                for t in rows
+            ]
+
+    def list_events(
+        self,
+        *,
+        project_id: str | None = None,
+        root_id: str | None = None,
+        after: int = 0,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """Events after seq ``after``, oldest first: for one project, one objective, or all."""
+        with self.tx() as s:
+            q = select(Event).where(Event.seq > after)
+            if project_id:
+                q = q.where(Event.project_id == project_id)
+            if root_id:
+                ids = select(Task.id).where(Task.root_id == root_id)
+                q = q.where(Event.task_id.in_(ids))
+            events = s.scalars(q.order_by(Event.seq).limit(limit)).all()
+            ids = {e.task_id for e in events if e.task_id}
+            node = {
+                t.id: t.plan_node_id or "objective"
+                for t in s.scalars(select(Task).where(Task.id.in_(ids)))
+            }
+            return [
+                {
+                    "seq": e.seq,
+                    "ts": e.ts,
+                    "project_id": e.project_id,
+                    "task_id": e.task_id,
+                    "node": node.get(e.task_id or "", "-"),
+                    "actor": e.actor,
+                    "type": e.type,
+                    "payload": e.payload,
+                }
+                for e in events
+            ]
+
     def verified_targets(self, verifier_id: str) -> list[str]:
         """The work task(s) a gate or review checks."""
         with self.tx() as s:
@@ -926,6 +1002,14 @@ class TaskOrchestrator:
         """A runtime event about a task (merge, worktree, gate output) on the same chain."""
         with self.tx() as s:
             self._event(s, self._task(s, task_id), type, payload, actor=actor)
+
+    def log_project_event(
+        self, project_id: str, type: str, payload: dict[str, Any], *, actor: str = HUMAN
+    ) -> None:
+        """An event about the project itself (files a person added to its repo)."""
+        with self.tx() as s:
+            p = self._project(s, project_id)
+            self.events.append(s, project_id=p.id, type=type, actor=actor, payload=payload)
 
     def evidence(self, root_id: str) -> dict[str, Any]:
         """Everything an auditor needs for one objective: plans, tasks, verdicts, decisions."""
@@ -1177,6 +1261,10 @@ class TaskOrchestrator:
             for _, child in self._downstream(s, t.id):
                 if child.status not in TERMINAL_STATUSES:
                     self._cancel(s, child, f"upstream task {t.id} is {to}")
+            # An objective or plan task that ends takes the tasks under it along.
+            for sub in s.scalars(select(Task).where(Task.parent_id == t.id)):
+                if sub.status not in TERMINAL_STATUSES:
+                    self._cancel(s, sub, f"parent task {t.id} is {to}")
         # 3. The last planned task to finish closes the plan task.
         if to in TERMINAL_STATUSES and t.parent_id:
             self._settle_plan(s, t.parent_id)

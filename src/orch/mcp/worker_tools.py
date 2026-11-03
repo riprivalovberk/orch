@@ -232,6 +232,20 @@ def complete_task(ctx: RunContext[WorkerDeps], summary: str) -> dict[str, Any]:
         # Cheap checks the gates would fail anyway: catch them here, while the agent can fix
         # them, instead of spending a review round on them.
         changed = d.ws.changed_files(c.task_id)
+        stray = [
+            f for f in changed if not task_can_write(c.write_paths, c.paths, f, SENSITIVE_DIRS)
+        ]
+        if stray:
+            # Something other than write_file made them, e.g. code that runs on import or
+            # in a test. The policy gate would fail every round, so undo them now.
+            d.ws.revert_files(c.task_id, stray)
+            raise ModelRetry(
+                f"{', '.join(stray)} {'is' if len(stray) == 1 else 'are'} outside this task's "
+                f"paths ({', '.join(c.paths)}), so they were removed. Code you wrote created "
+                "or changed them (on import, at test time, or in a script): remove that code, "
+                "run the tests, then complete_task. If a test needs a file you may not write, "
+                "say so in your summary instead."
+            )
         py = [f for f in changed if f.endswith(".py") and (d.root() / f).exists()]
         tidied = gates.ruff_tidy(d.root(), py)
         if py:

@@ -149,9 +149,18 @@ class Workspace:
     def changed_files(self, task_id: str) -> list[str]:
         """Files the task changed since its base, committed or not (new files included)."""
         d = self.task_dir(task_id)
-        committed = git(d, "diff", "--name-only", self.base(task_id), "HEAD").stdout.split()
-        pending = git(d, "status", "--porcelain", "--untracked-files=all").stdout.splitlines()
-        return sorted({*committed, *(line[3:].strip() for line in pending)})
+        tracked = git(d, "diff", "--name-only", self.base(task_id)).stdout.splitlines()
+        new = git(d, "ls-files", "--others", "--exclude-standard").stdout.splitlines()
+        return sorted({*tracked, *new})
+
+    def revert_files(self, task_id: str, files: list[str]) -> None:
+        """Put these files back as they were at the task's base: restored, or deleted if new."""
+        d, base = self.task_dir(task_id), self.base(task_id)
+        for f in files:
+            if git(d, "cat-file", "-e", f"{base}:{f}", check=False).returncode == 0:
+                git(d, "checkout", base, "--", f)
+            else:
+                (d / f).unlink(missing_ok=True)
 
     def diff(self, task_id: str, *, limit: int = 40_000) -> str:
         """The task's change since its base, for reviewers."""

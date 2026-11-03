@@ -303,6 +303,26 @@ def test_complete_task_formats_and_sorts_imports_itself(
     assert orch.get_task(c.task_id)["status"] != TaskStatus.RUNNING
 
 
+def test_complete_task_removes_files_outside_the_task_paths(
+    orch: TaskOrchestrator, team: TeamRegistry, ws: Workspace, good_plan: Plan
+):
+    # positions-rec-6: code run at test time copied deploy files to the repo root
+    srv, c, _ = worker(orch, team, ws, good_plan)
+    d = ws.task_dir(c.task_id)
+    run(srv.call(c, "write_file", {"path": "tests/test_transfers.py", "content": "X = 1\n"}))
+    readme = (d / "README.md").read_text()
+    (d / "host.json").write_text("{}\n")
+    (d / "README.md").write_text("changed\n")
+    ws.commit(c.task_id, "earlier round", author="test_engineer")
+    r = run(srv.call(c, "complete_task", {"summary": "tests"}))
+    text = r.content[0].text  # type: ignore[union-attr]
+    assert r.is_error and "README.md, host.json are outside" in text
+    assert not (d / "host.json").exists() and (d / "README.md").read_text() == readme
+    assert (d / "tests/test_transfers.py").exists()
+    done = run(srv.call(c, "complete_task", {"summary": "tests"}))
+    assert not done.is_error and ws.changed_files(c.task_id) == ["tests/test_transfers.py"]
+
+
 def test_revision_without_changes_is_refused(
     orch: TaskOrchestrator, team: TeamRegistry, ws: Workspace, good_plan: Plan, monkeypatch
 ):
@@ -423,4 +443,7 @@ def test_briefs_name_the_work_other_steps_build(
     assert "implement_api: HTTP endpoint (writes minibank/api.py)" in impl_brief
     # a reviewer's own step is the work it checks, so only the other one is listed
     assert r._verified_nodes(orch.get_task(tasks["review_transfer"])) == ["implement_transfer"]
-    assert "Other steps" not in r.brief(orch.get_task(tasks["write_tests"]))
+    tests_brief = r.brief(orch.get_task(tasks["write_tests"]))
+    assert "Other steps" not in tests_brief
+    # the test engineer learns where the code lands, so tests don't look elsewhere
+    assert "implement_api: writes minibank/api.py" in tests_brief

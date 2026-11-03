@@ -73,6 +73,9 @@ agents:
       name per behavior). Run the tests until they pass, then complete_task with a summary of
       what changed. If your task was reopened, address every finding from the previous review
       round first: the reviewer's recommendations are requirements.
+      Only create files through write_file, inside your task's paths. Never write code that
+      creates or copies files elsewhere, at import, test time or otherwise. If a test needs a
+      file you may not write, leave it failing and say so in your complete_task summary.
 
   - name: payments_developer
     description: >-

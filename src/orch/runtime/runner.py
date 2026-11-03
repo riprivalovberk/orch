@@ -359,6 +359,18 @@ class Runner:
                     "Other steps of the plan build the rest; their work is not part of this "
                     "task, so do not write it or ask for it here:\n" + "\n".join(others)
                 )
+        if accepted and kind == TaskKind.TEST:
+            code = [
+                f"- {n['id']}: writes {', '.join(n.get('paths') or []) or 'unspecified files'}"
+                for n in accepted[-1]["nodes"]
+                if n["kind"] == TaskKind.IMPLEMENT
+            ]
+            if code:
+                out.append(
+                    "The code these tests check is written by the steps below, only in their "
+                    "files. Look for modules and files there; a test that expects a file "
+                    "anywhere else can never pass:\n" + "\n".join(code)
+                )
         if kind in WRITING:
             out.append(
                 "Files this task may write: "

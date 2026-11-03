@@ -4,8 +4,10 @@ import subprocess
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 import pytest
+from starlette.applications import Starlette
 from starlette.testclient import TestClient
 
 from orch.core.orchestrator import TaskOrchestrator
@@ -25,6 +27,11 @@ def client(tmp_path: Path, monkeypatch) -> TestClient:
         template=ROOT / "examples" / "minibank",
     )
     return TestClient(app)
+
+
+def runs(c: TestClient):
+    """The app's run registry; ``TestClient.app`` is typed as a bare ASGI app."""
+    return cast(Starlette, c.app).state.runs
 
 
 def wait_for_run(c: TestClient, root: str, timeout: float = 60) -> dict:
@@ -191,7 +198,7 @@ def test_upload_waits_for_runs_of_the_project(client: TestClient):
     p = client.post("/api/projects", json={"name": "rec"}).json()
     body = {"objective": "reconcile", "start": False}
     r = client.post(f"/api/projects/{p['id']}/objectives", json=body).json()
-    client.app.state.runs.runs[r["root_id"]] = RunInfo(r["root_id"], RunOptions(), "now")
+    runs(client).runs[r["root_id"]] = RunInfo(r["root_id"], RunOptions(), "now")
     one = [("files", ("a.csv", b"x\n", "text/csv"))]
     res = client.post(f"/api/projects/{p['id']}/files", data={"folder": "data"}, files=one)
     assert res.status_code == 409
@@ -311,7 +318,7 @@ def test_pm_starts_an_objective_when_asked_for_work(tmp_path: Path, monkeypatch)
     calls = [("start_objective", {"objective": "Reconcile data/a.csv against data/b.csv"})]
     c, _ = make_client(tmp_path, monkeypatch, model=scripted_pm(calls, lambda o: "Started."))
     started: list[str] = []
-    c.app.state.runs.start = lambda root, opts=None: started.append(root)  # no real run
+    runs(c).start = lambda root, opts=None: started.append(root)  # no real run
     p = c.post("/api/projects", json={"name": "rec"}).json()
     c.post(f"/api/projects/{p['id']}/say", json={"text": "build me a reconciliation"})
     msgs = wait_for_reply(c, p["id"], "build me a reconciliation")
@@ -328,7 +335,7 @@ def test_pm_will_not_start_a_second_objective_while_one_runs(tmp_path: Path, mon
     p = c.post("/api/projects", json={"name": "rec"}).json()
     body = {"objective": "first", "start": False}
     r = c.post(f"/api/projects/{p['id']}/objectives", json=body).json()
-    c.app.state.runs.runs[r["root_id"]] = RunInfo(r["root_id"], RunOptions(), "now")
+    runs(c).runs[r["root_id"]] = RunInfo(r["root_id"], RunOptions(), "now")
     c.post(f"/api/projects/{p['id']}/say", json={"text": "also do more work"})
     msgs = wait_for_reply(c, p["id"], "also do more work")
     assert "already running" in msgs[-1]["text"]

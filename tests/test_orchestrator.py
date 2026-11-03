@@ -4,14 +4,14 @@ import pytest
 from sqlalchemy import text
 
 from orch.core.orchestrator import InvalidOperation, TaskOrchestrator
-from orch.domain.enums import GateName
+from orch.domain.enums import EdgeKind, GateName, TaskKind, Verdict
 from orch.domain.enums import TaskStatus as S
 from orch.domain.schemas import Finding, GateResultIn, ProjectLimits, ReviewVerdict
 
 ALL_GATES = [GateResultIn(gate=g, passed=True) for g in GateName]
-APPROVE = ReviewVerdict(verdict="approve", summary="meets every criterion")
+APPROVE = ReviewVerdict(verdict=Verdict.APPROVE, summary="meets every criterion")
 CHANGES = ReviewVerdict(
-    verdict="request_changes",
+    verdict=Verdict.REQUEST_CHANGES,
     findings=[Finding(severity="blocker", issue="amount uses float", criterion_id="AC-2")],
 )
 
@@ -116,7 +116,7 @@ def test_review_must_cite_a_criterion(orch, team, good_plan):
     orch.complete(ids["implement_transfer"], "ok")
     start(orch, ids["review_transfer"])
     uncited = ReviewVerdict(
-        verdict="request_changes", findings=[Finding(severity="blocker", issue="vibes")]
+        verdict=Verdict.REQUEST_CHANGES, findings=[Finding(severity="blocker", issue="vibes")]
     )
     with pytest.raises(InvalidOperation, match="cite an acceptance criterion"):
         orch.record_review(ids["review_transfer"], uncited)
@@ -249,9 +249,10 @@ def test_adding_an_agent_lets_the_plan_clear(orch, team, team_with_security, goo
     from orch.domain.schemas import PlanEdge, PlanNode
 
     p.nodes.append(
-        PlanNode(id="security_check", kind="security_review", assignee="security_reviewer")
+        PlanNode(id="security_check", kind=TaskKind.SECURITY_REVIEW, assignee="security_reviewer")
     )
-    p.edges.append(PlanEdge(source="implement_transfer", target="security_check", kind="verifies"))
+    edge = PlanEdge(source="implement_transfer", target="security_check", kind=EdgeKind.VERIFIES)
+    p.edges.append(edge)
     assert orch.submit_plan(root, p).valid
 
 
@@ -304,7 +305,7 @@ def test_review_may_block_on_an_engineering_standard(orch, team, good_plan):
     alias = Finding(
         severity="major", issue="pct_diff only renames pct_difference", criterion_id="STD-001"
     )
-    verdict = ReviewVerdict(verdict="request_changes", findings=[alias])
+    verdict = ReviewVerdict(verdict=Verdict.REQUEST_CHANGES, findings=[alias])
     assert orch.record_review(ids["review_transfer"], verdict) == S.DONE
     root = orch.get_task(ids["review_transfer"])["root_id"]
     (review,) = orch.evidence(root)["reviews"]

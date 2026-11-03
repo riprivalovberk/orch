@@ -214,7 +214,8 @@ def test_bad_example_reports_everything(bad_plan, team):
 def test_cycle_is_reported_in_edge_order():
     nodes = [{"id": i, "kind": "implement", "assignee": "developer"} for i in "abcd"]
     edges = [["d", "a"], ["a", "b"], ["b", "c"], ["c", "a"]]
-    cycle = PlanGraph(Plan(objective="x", nodes=nodes, edges=edges)).find_cycle()
+    plan = Plan.model_validate({"objective": "x", "nodes": nodes, "edges": edges})
+    cycle = PlanGraph(plan).find_cycle()
     assert cycle is not None and cycle[0] == cycle[-1]
     pairs = set(itertools.pairwise(cycle))
     assert pairs == {("a", "b"), ("b", "c"), ("c", "a")}

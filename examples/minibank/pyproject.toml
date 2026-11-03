@@ -1,0 +1,21 @@
+[project]
+name = "minibank"
+version = "0.1.0"
+description = "A tiny bank service: the app orch's agents change."
+requires-python = ">=3.12"
+dependencies = ["pandas>=2"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.ruff.lint.isort]
+# Tests import modules before they are written (test-first), so name the package outright.
+known-first-party = ["minibank"]

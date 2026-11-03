@@ -3,6 +3,9 @@
 SOD  segregation of duties     GATE  deterministic checks     COV  test coverage
 APR  human approval            PAY   payments code needs a security review
 SCOPE  every test/implement node says what it writes, and its assignee may write it
+IFACE  a plan that builds code fixes its interface first, so tests and code agree
+
+STANDARDS are the engineering rules reviewers may block on, besides the acceptance criteria.
 """
 
 from __future__ import annotations
@@ -11,13 +14,27 @@ from collections.abc import Iterable
 
 from orch.core.plan import PlanGraph, Rule, ValidationContext, err
 from orch.core.scope import can_write, protected_grants, touches
-from orch.domain.enums import REVIEW_KINDS, GateName, TaskKind
+from orch.domain.enums import REVIEW_KINDS, EdgeKind, GateName, TaskKind
 from orch.domain.schemas import PlanError
 
 REQUIRED_GATES = frozenset({GateName.PYTEST, GateName.RUFF, GateName.POLICY})
 SENSITIVE_DIRS = frozenset({"payments"})
 BUILD_KINDS = frozenset({TaskKind.IMPLEMENT, TaskKind.TEST, *REVIEW_KINDS})
 WRITING_KINDS = (TaskKind.TEST, TaskKind.IMPLEMENT)
+MIN_INTERFACE_CHARS = 40
+
+STANDARDS: dict[str, str] = {
+    "STD-001": "One name per behavior: no aliases, wrappers that only rename, or duplicate "
+    "keys holding the same value.",
+    "STD-002": "Object-oriented design where there is state or a workflow: small classes "
+    "with one job each, typed attributes (dataclasses), and no long procedural functions.",
+    "STD-003": "Use the well-known library for the job instead of hand-rolled code: pandas "
+    "for CSV and tabular data, decimal.Decimal for money, the standard library otherwise.",
+    "STD-004": "Readable and typed: type hints on public functions, docstrings on public "
+    "classes, constants named, no dead code or commented-out code.",
+    "STD-005": "Tests exercise the planned interface by its exact names; no guessing "
+    "between alternative names (getattr/hasattr probing).",
+}
 
 
 def sod_001_independent_review(g: PlanGraph, ctx: ValidationContext) -> Iterable[PlanError]:
@@ -78,6 +95,36 @@ def gate_001_required_gates(g: PlanGraph, ctx: ValidationContext) -> Iterable[Pl
                 f"{impl.id} is not verified by gate(s) {', '.join(missing)}",
                 "add a gate node with gates: [pytest, ruff, policy] and a verifies edge "
                 f"from {impl.id}",
+            )
+
+
+def gate_002_whole_suite(g: PlanGraph, ctx: ValidationContext) -> Iterable[PlanError]:
+    """A pytest gate runs every test, so all implement work must be written when it runs.
+
+    The tests are written first, for every criterion. A gate that checks one implement node
+    while another is still to come runs that other node's tests too, and can never pass.
+    """
+    impls = {n.id for n in g.of_kind(TaskKind.IMPLEMENT)}
+    for gate in g.of_kind(TaskKind.GATE):
+        if GateName.PYTEST not in gate.gates:
+            continue
+        targets = {n.id for n in g.verified_by(gate.id)}
+        finished = set(targets)  # targets are submitted; what blocks them is done
+        queue = list(targets)
+        while queue:
+            for e in g.inc[queue.pop()]:
+                if e.kind == EdgeKind.BLOCKS and e.source not in finished:
+                    finished.add(e.source)
+                    queue.append(e.source)
+        later = sorted(impls - finished)
+        if later and targets & impls:
+            yield err(
+                "GATE-002",
+                gate.id,
+                f"{gate.id} runs pytest on {', '.join(sorted(targets))} before "
+                f"{', '.join(later)} is written, so the tests for that work fail there",
+                "use one implement node for the code the tests exercise, or one pytest gate "
+                "that verifies every implement node (they then must not block each other)",
             )
 
 
@@ -208,12 +255,27 @@ def pay_001_security_review(g: PlanGraph, ctx: ValidationContext) -> Iterable[Pl
             )
 
 
+def iface_001_interface_first(g: PlanGraph, ctx: ValidationContext) -> Iterable[PlanError]:
+    """A plan with implement work states the interface, so tests and code are written to it."""
+    if g.of_kind(TaskKind.IMPLEMENT) and len(g.plan.interface.strip()) < MIN_INTERFACE_CHARS:
+        yield err(
+            "IFACE-001",
+            None,
+            "the plan builds code but does not fix its interface",
+            "set the plan's interface: each module, its classes and public functions with "
+            "exact names, arguments and return types (and result fields), so the tests can be "
+            "written before the code",
+        )
+
+
 RULES: tuple[Rule, ...] = (
     sod_001_independent_review,
     sod_002_pm_does_not_build,
     gate_001_required_gates,
+    gate_002_whole_suite,
     cov_001_criteria_tested,
     apr_001_single_approval,
     scope_001_paths,
     pay_001_security_review,
+    iface_001_interface_first,
 )

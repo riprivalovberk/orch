@@ -77,6 +77,51 @@ def test_cycle_is_str_001(good_plan, team):
     assert "STR-001" in codes(check(p, team))
 
 
+def test_gate_verifying_tests_and_impl_is_str_006(good_plan, team):
+    # the positions-rec deadlock: write_tests waits for gates, gates waits for
+    # implement_transfer, implement_transfer waits for write_tests
+    p = edit(good_plan, add_edges=[["write_tests", "gates", "verifies"]])
+    errors = [e for e in check(p, team) if e.code == "STR-006"]
+    assert len(errors) == 1 and errors[0].node == "gates"
+    assert {"write_tests", "implement_transfer"} <= set(
+        errors[0].message.split(": ")[1].split(", ")
+    )
+    assert "STR-001" not in codes(check(p, team))  # the edges alone have no cycle
+
+
+SECOND_IMPL = {
+    "id": "implement_api",
+    "kind": "implement",
+    "assignee": "developer",
+    "paths": ["minibank/api.py"],
+}
+
+
+def test_gate_before_later_implementation_is_gate_002(good_plan, team):
+    # positions-rec-5: the gate on the first step ran the tests for the second step's code
+    p = edit(
+        good_plan,
+        add_nodes=[SECOND_IMPL],
+        add_edges=[["implement_transfer", "implement_api"], ["implement_api", "approve"]],
+    )
+    errors = [e for e in check(p, team) if e.code == "GATE-002"]
+    assert len(errors) == 1 and errors[0].node == "gates" and "implement_api" in errors[0].message
+
+
+def test_one_gate_over_parallel_implementations_clears_gate_002(good_plan, team):
+    p = edit(
+        good_plan,
+        add_nodes=[SECOND_IMPL, {"id": "review_api", "kind": "review", "assignee": "reviewer"}],
+        add_edges=[
+            ["write_tests", "implement_api"],
+            ["implement_api", "gates", "verifies"],
+            ["implement_api", "review_api", "verifies"],
+            ["implement_api", "approve"],
+        ],
+    )
+    assert check(p, team) == []
+
+
 def test_dangling_edge_short_circuits(good_plan, team):
     errors = check(edit(good_plan, add_edges=[["ghost", "approve"]]), team)
     assert codes(errors) == ["STR-002"]
@@ -173,3 +218,10 @@ def test_cycle_is_reported_in_edge_order():
     assert cycle is not None and cycle[0] == cycle[-1]
     pairs = set(itertools.pairwise(cycle))
     assert pairs == {("a", "b"), ("b", "c"), ("c", "a")}
+
+
+def test_iface001_code_needs_an_interface_first(team, good_plan):
+    p = good_plan.model_copy(update={"interface": ""})
+    errors = check(p, team)
+    assert [e.code for e in errors] == ["IFACE-001"] and "exact names" in errors[0].hint
+    assert check(good_plan, team) == []

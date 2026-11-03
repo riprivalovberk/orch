@@ -1,0 +1,720 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>orch</title>
+<style>
+:root {
+  --bg: #f6f6f4; --panel: #fff; --ink: #1c1c1a; --muted: #6b6b66; --line: #e3e2de;
+  --accent: #2f5bd3; --ok: #1f8a4c; --warn: #b26a00; --bad: #c0362c; --chip: #efeee9;
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141413; --panel: #1d1d1b; --ink: #ecebe6; --muted: #9a9993; --line: #2e2e2b;
+    --accent: #7c9cff; --ok: #4cc27f; --warn: #e3a33a; --bad: #f0675c; --chip: #2a2a27;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+header { display: flex; align-items: center; gap: 18px; padding: 10px 18px;
+  border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 5; }
+header h1 { font-size: 17px; margin: 0; letter-spacing: .3px; }
+nav { display: flex; gap: 4px; flex-wrap: wrap; }
+nav a { color: var(--muted); text-decoration: none; padding: 5px 10px; border-radius: 6px; }
+nav a.on { background: var(--chip); color: var(--ink); }
+nav a .n { background: var(--bad); color: #fff; border-radius: 9px; padding: 0 6px; font-size: 11px; margin-left: 4px; }
+#status { margin-left: auto; display: flex; gap: 6px; font-size: 12px; }
+main { display: grid; grid-template-columns: 260px 1fr; min-height: calc(100vh - 50px); }
+aside { border-right: 1px solid var(--line); padding: 14px; background: var(--panel); }
+section#view { padding: 18px 22px; min-width: 0; }
+h2 { font-size: 18px; margin: 0 0 4px; } h3 { font-size: 14px; margin: 20px 0 8px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin-bottom: 14px; }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.muted { color: var(--muted); } .mono { font-family: var(--mono); font-size: 12px; }
+button, .btn { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+  padding: 6px 12px; border-radius: 7px; cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.danger { color: var(--bad); }
+button:disabled { opacity: .5; cursor: default; }
+input, textarea, select { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line);
+  border-radius: 7px; padding: 6px 9px; width: 100%; }
+textarea { font-family: var(--mono); font-size: 12.5px; }
+label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 3px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.plist a { display: block; padding: 8px 10px; border-radius: 7px; color: var(--ink); text-decoration: none; margin-bottom: 2px; }
+.plist a.on, .plist a:hover { background: var(--chip); }
+.plist small { display: block; color: var(--muted); }
+.chip { display: inline-block; padding: 1px 8px; border-radius: 10px; background: var(--chip); font-size: 12px; white-space: nowrap; }
+.s-DONE, .s-pass, .s-true { color: var(--ok); } .s-FAILED, .s-fail, .s-false, .s-error { color: var(--bad); }
+.s-RUNNING, .s-running { color: var(--accent); } .s-WAITING_HUMAN, .s-READY, .s-BLOCKED { color: var(--warn); }
+.s-CANCELED, .s-stopped { color: var(--muted); }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 500; font-size: 12px; }
+tr.click { cursor: pointer; } tr.click:hover { background: var(--chip); }
+.events { font-family: var(--mono); font-size: 12px; max-height: 520px; overflow: auto; }
+.events div { padding: 3px 4px; border-bottom: 1px solid var(--line); display: grid;
+  grid-template-columns: 44px 58px minmax(70px, 130px) minmax(60px, 110px) minmax(90px, 160px) minmax(180px, 1fr);
+  gap: 8px; cursor: pointer; overflow-wrap: anywhere; }
+.events div:hover { background: var(--chip); }
+.events pre { grid-column: 1 / -1; margin: 4px 0; white-space: pre-wrap; }
+pre.box { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px;
+  overflow: auto; max-height: 480px; font-size: 12px; white-space: pre-wrap; }
+.req { border-left: 3px solid var(--warn); }
+.err { color: var(--bad); white-space: pre-wrap; }
+#toast { position: fixed; bottom: 18px; right: 18px; max-width: 460px; background: var(--ink); color: var(--bg);
+  padding: 10px 14px; border-radius: 8px; display: none; z-index: 20; white-space: pre-wrap; }
+dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--ink);
+  width: min(900px, 94vw); padding: 18px; }
+dialog::backdrop { background: rgb(0 0 0 / .4); }
+section#view.chat-mode { padding: 0; display: flex; flex-direction: column; height: calc(100vh - 50px); }
+.chat-head { display: flex; align-items: center; gap: 10px; padding: 10px 18px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.chat-body { flex: 1; display: flex; min-height: 0; }
+.chat-col { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.thread { flex: 1; overflow: auto; padding: 18px 22px; display: flex; flex-direction: column; gap: 10px; }
+.msg { max-width: min(760px, 88%); } .msg .who { font-size: 11px; color: var(--muted); margin: 0 4px 2px; }
+.bubble { padding: 9px 13px; border-radius: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg.user { align-self: flex-end; } .msg.user .who { text-align: right; }
+.msg.user .bubble { background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
+.msg.pm .bubble { background: var(--panel); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+.msg.pm.ask .bubble { border-color: var(--warn); box-shadow: 0 0 0 1px var(--warn); }
+.msg .acts { margin-top: 6px; display: flex; gap: 6px; flex-wrap: wrap; }
+.msg ol { margin: 6px 0 0; padding-left: 20px; white-space: normal; } .msg details { white-space: normal; margin-top: 6px; }
+.activity { align-self: center; font-size: 12px; color: var(--muted); max-width: 760px; text-align: center; }
+.activity summary { cursor: pointer; } .activity div { padding: 1px 0; }
+.divider { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; margin-top: 10px; }
+.divider::before, .divider::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+.working { padding: 6px 22px; font-size: 12px; color: var(--accent); min-height: 4px; }
+.dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); margin-right: 6px; animation: pulse 1.2s infinite; }
+@keyframes pulse { 50% { opacity: .25; } }
+.wf { margin-top: 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); overflow: hidden; }
+.wf-head { display: flex; justify-content: space-between; gap: 10px; padding: 8px 12px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); }
+.wf details { border-top: 1px solid var(--line); margin-top: 0; } .wf details:first-of-type { border-top: 0; }
+.wf summary { display: flex; align-items: center; gap: 10px; padding: 7px 12px; cursor: pointer; list-style: none; }
+.wf summary::-webkit-details-marker { display: none; }
+.wf .nm { font-family: var(--mono); font-size: 13px; } .wf .sub { flex: 1; min-width: 0; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf .dur { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.wf .log { padding: 2px 12px 8px 36px; font-size: 12px; color: var(--muted); } .wf .log div { padding: 1px 0; }
+.wf .st-waiting .nm, .wf .st-queued .nm, .wf .st-rerun .nm, .wf .st-canceled .nm { color: var(--muted); }
+.ic { flex: none; width: 14px; height: 14px; border-radius: 50%; display: grid; place-items: center; font-size: 10px; line-height: 1; color: #fff; font-weight: 700; box-sizing: border-box; }
+.st-done .ic { background: var(--ok); } .st-done .ic::after { content: "✓"; }
+.st-failed .ic { background: var(--bad); } .st-failed .ic::after { content: "✕"; }
+.st-running .ic { border: 2px solid var(--warn); border-top-color: transparent; animation: spin .9s linear infinite; }
+.st-checking .ic { border: 2px solid var(--warn); } .st-checking .ic::after { content: ""; width: 4px; height: 4px; border-radius: 50%; background: var(--warn); }
+.st-needs_you .ic { background: var(--warn); } .st-needs_you .ic::after { content: "!"; }
+.st-queued .ic, .st-waiting .ic, .st-rerun .ic { border: 2px solid var(--line); }
+.st-canceled .ic { border: 2px solid var(--muted); } .st-canceled .ic::after { content: ""; width: 6px; height: 2px; background: var(--muted); }
+@keyframes spin { to { transform: rotate(360deg); } }
+.composer { border-top: 1px solid var(--line); padding: 10px 18px 12px; background: var(--panel); }
+.composer textarea { font-family: inherit; font-size: 14px; resize: vertical; min-height: 44px; }
+.composer .opts summary { cursor: pointer; } .composer .opts[open] { width: 100%; }
+.files { width: 300px; flex: none; border-left: 1px solid var(--line); background: var(--panel); overflow: auto; padding: 12px; }
+.files .f { display: flex; justify-content: space-between; align-items: center; gap: 6px; padding: 5px 6px; border-radius: 6px;
+  cursor: pointer; font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+.files .f:hover { background: var(--chip); }
+.files .f button { padding: 1px 6px; font-size: 11px; }
+@media (max-width: 760px) {
+  section#view.chat-mode { height: auto; min-height: 70vh; }
+  .files { position: fixed; right: 0; top: 0; bottom: 0; z-index: 6; width: min(320px, 90vw); }
+  main { grid-template-columns: 1fr; } aside { border-right: 0; border-bottom: 1px solid var(--line); }
+  header { flex-wrap: wrap; } #status { margin-left: 0; }
+  .events div { grid-template-columns: 50px 1fr 1fr; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>orch</h1>
+  <nav id="nav">
+    <a href="#/" data-v="projects">Projects</a>
+    <a href="#/events" data-v="events">Events</a>
+    <a href="#/inbox" data-v="inbox">Inbox<span class="n" id="inboxN" hidden></span></a>
+    <a href="#/team" data-v="team">Team</a>
+    <a href="#/plan" data-v="plan">Plan check</a>
+    <a href="#/admin" data-v="admin">Admin</a>
+  </nav>
+  <div id="status"></div>
+</header>
+<main>
+  <aside>
+    <div class="row" style="justify-content:space-between;margin-bottom:8px">
+      <strong>Projects</strong><button class="primary" onclick="go('#/new')">+ New</button>
+    </div>
+    <div class="plist" id="plist"></div>
+  </aside>
+  <section id="view"></section>
+</main>
+<dialog id="dlg"><div id="dlgBody"></div><div class="row" style="justify-content:flex-end;margin-top:12px"><button onclick="dlg.close()">Close</button></div></dialog>
+<div id="toast"></div>
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const st = s => `<span class="chip s-${esc(s)}">${esc(s ?? "-")}</span>`;
+const money = n => "$" + Number(n || 0).toFixed(4);
+const go = h => { location.hash = h; };
+let O = {}, P = [], timer = null, evAfter = 0, evRows = [];
+
+async function api(path, body) {
+  const r = await fetch("/api" + path, body === undefined ? {} :
+    {method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify(body)});
+  const j = await r.json().catch(() => ({error: r.statusText}));
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+function toast(msg, ms = 4000) {
+  const t = $("#toast"); t.textContent = msg; t.style.display = "block";
+  clearTimeout(toast.t); toast.t = setTimeout(() => t.style.display = "none", ms);
+}
+async function act(fn, ok) {
+  try { const r = await fn(); if (ok) toast(ok); await render(); return r; }
+  catch (e) { toast("Error: " + e.message, 8000); }
+}
+function showDialog(html) { $("#dlgBody").innerHTML = html; dlg.showModal(); }
+
+// ------------------------------------------------------------------ chrome
+
+async function refreshChrome() {
+  [O, P] = await Promise.all([api("/overview"), api("/projects")]);
+  const inbox = await api("/inbox");
+  const n = $("#inboxN"); n.hidden = !inbox.length; n.textContent = inbox.length;
+  $("#status").innerHTML =
+    `<span class="chip ${O.api_key ? "s-true" : "s-WAITING_HUMAN"}">${O.api_key ? "API key set" : "no MODEL_API_KEY (offline only)"}</span>` +
+    `<span class="chip ${O.running.length ? "s-running" : ""}">${O.running.length} running</span>`;
+  const cur = location.hash.split("/");
+  $("#plist").innerHTML = P.length ? P.map(p => {
+    const on = (cur[1] === "project" && cur[2] === p.id) ||
+      (cur[1] === "objective" && p.objectives.some(o => o.id === cur[2]));
+    const live = p.objectives.filter(o => o.run && o.run.state === "running").length;
+    return `<a href="#/project/${p.id}" class="${on ? "on" : ""}">${esc(p.name)}
+      <small>${p.objectives.length} objective(s) · ${money(p.spent_usd)} / $${p.budget_usd.toFixed(2)}${live ? ` · <span class="s-running">${live} running</span>` : ""}</small></a>`;
+  }).join("") : `<p class="muted">No projects yet.</p>`;
+  document.querySelectorAll("#nav a").forEach(a => a.classList.toggle("on",
+    a.dataset.v === (["", "new", "project", "objective"].includes(cur[1] || "") ? "projects" : cur[1])));
+}
+
+// ------------------------------------------------------------------ views
+
+const views = {
+  async ""() {
+    if (P.length) return go(`#/project/${P[0].id}`);
+    return views.new();
+  },
+
+  async new() {
+    return `<h2>New project</h2><p class="muted">A project is one target git repo, the agent team and a shared budget.
+      Leave the repo empty to make a new folder in <span class="mono">${esc(O.data_dir)}/repos/&lt;name&gt;</span>.</p>
+      <div class="card" style="max-width:640px">
+        <label>Name</label><input id="pName" placeholder="payments-api">
+        <label>Target repo path (optional): an existing git repo, or a new folder</label><input id="pRepo" placeholder="~/code/my-service — leave empty for a new repo under the data folder">
+        <label>A new repo starts as</label><select id="pStarter">
+          <option value="empty" selected>Empty Python project (pyproject, README, tests/)</option>
+          <option value="minibank">minibank sample bank app (needed for the offline demo)</option></select>
+        <label>Budget (USD, shared by all objectives)</label><input id="pBudget" type="number" step="0.5" value="${O.default_budget}">
+        <div class="row" style="margin-top:12px"><button class="primary" onclick="createProject()">Create project</button></div>
+      </div>`;
+  },
+
+  async project(pid, sub) {
+    const p = P.find(x => x.id === pid) || await api(`/projects/${pid}`);
+    return sub === "details" ? detailsHtml(p) : chatHtml(p);
+  },
+
+  async objective(root) {
+    const ev = await api(`/objectives/${root}`);
+    const run = ev.run;
+    const tasks = ev.tasks;
+    const live = run && run.state === "running";
+    return `<div class="row" style="justify-content:space-between">
+        <div><a href="#/project/${ev.project_id}" class="muted">← chat</a> · <a href="#/project/${ev.project_id}/details" class="muted">project details</a>
+          <h2>${esc(ev.objective)}</h2>
+          <div class="row">${st(ev.root.status)} ${run ? `run ${st(run.state)}` : ""} <span class="muted">cost ${money(ev.cost_usd)}</span>
+          <span class="muted mono">${root}</span></div></div>
+        <div class="row">
+          <button onclick="resume('${root}')" ${live ? "disabled" : ""}>${live ? "Running…" : "Resume run"}</button>
+          <button onclick="showEvidence('${root}')">Evidence pack</button>
+          ${["DONE", "FAILED", "CANCELED"].includes(ev.root.status) ? "" : `<button class="danger" onclick="cancelTask('${root}')">Cancel objective</button>`}</div></div>
+      ${run && run.report && (run.report.note || run.report.merged_into_main) ? `<div class="card"><strong>Last run:</strong> ${esc(run.report.status)} ${run.report.note ? `— <span class="err" style="color:inherit">${esc(run.report.note)}</span>` : ""}
+        ${run.report.merged_into_main ? `<div class="s-DONE">merged into main at ${esc(run.report.merged_into_main.slice(0, 10))}</div>` : ""}</div>` : ""}
+      ${run && run.error ? `<div class="card"><strong class="s-error">Runner error</strong><pre class="box err">${esc(run.error)}</pre></div>` : ""}
+      ${ev.requests.map(reqCard).join("")}
+      ${Object.keys(ev.criteria).length ? `<h3>Acceptance criteria</h3><div class="card">${Object.entries(ev.criteria).map(([k, v]) => `<div><strong>${esc(k)}</strong> ${esc(v)}</div>`).join("")}</div>` : ""}
+      <h3>Tasks</h3><div class="card" style="padding:0"><table>
+        <tr><th>node</th><th>kind</th><th>assignee</th><th>status</th><th>outcome</th><th>rounds</th><th>summary</th></tr>
+        ${tasks.map(t => `<tr class="click" onclick="showTask('${t.id}')"><td class="mono">${esc(t.node || "objective")}</td><td>${esc(t.kind)}</td>
+          <td>${esc(t.assignee || "-")}</td><td>${st(t.status)}</td><td>${t.outcome ? st(t.outcome) : "-"}</td><td>${t.revision_round}</td>
+          <td class="muted">${esc((t.summary || "").slice(0, 120))}</td></tr>`).join("")}
+      </table></div>
+      ${ev.plans.length ? `<h3>Plans</h3><div class="card">${ev.plans.map(p => `<div>v${p.version} ${st(p.valid ? "pass" : "fail")} ${p.errors.map(e => `<div class="mono muted">  ${esc(e)}</div>`).join("")}</div>`).join("")}</div>` : ""}
+      ${ev.gates.length ? `<h3>Gates</h3><div class="card" style="padding:0"><table><tr><th>target</th><th>round</th><th>gate</th><th>passed</th></tr>
+        ${ev.gates.map(g => `<tr><td class="mono">${esc(g.target)}</td><td>${g.round}</td><td>${esc(g.gate)}</td><td>${st(String(g.passed))}</td></tr>`).join("")}</table></div>` : ""}
+      ${ev.reviews.length ? `<h3>Reviews</h3><div class="card">${ev.reviews.map(r => `<div style="margin-bottom:8px"><strong>${esc(r.target)}</strong> round ${r.round}: ${st(r.verdict)} by ${esc(r.reviewer)}
+        <div class="muted">${esc(r.summary)}</div>${r.findings.map(f => `<div class="mono">[${esc(f.severity)}] ${esc(f.issue)} ${f.criterion_id ? "(" + esc(f.criterion_id) + ")" : ""}</div>`).join("")}</div>`).join("")}</div>` : ""}
+      ${ev.artifacts.length ? `<h3>Artifacts</h3><div class="card" style="padding:0"><table><tr><th>task</th><th>name</th><th>kind</th><th>sha256</th></tr>
+        ${ev.artifacts.map(a => `<tr><td>${esc(a.task)}</td><td>${esc(a.name)}</td><td>${esc(a.kind)}</td><td class="mono">${esc(a.sha256.slice(0, 12))}</td></tr>`).join("")}</table></div>` : ""}
+      <h3>Events</h3><div class="card" style="padding:4px"><div class="events" id="objEvents"></div></div>`;
+  },
+
+  async events(q) {
+    const params = new URLSearchParams(q || "");
+    return `<h2>Events</h2><div class="card row">
+        <select id="fProject" style="width:auto"><option value="">all projects</option>${P.map(p => `<option value="${p.id}" ${params.get("project") === p.id ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select>
+        <input id="fText" placeholder="filter: type, actor, node, text…" style="max-width:320px" value="${esc(params.get("q") || "")}">
+        <label style="display:flex;gap:6px;align-items:center;margin:0"><input id="fFollow" type="checkbox" style="width:auto" checked> follow</label>
+        <span class="muted" id="evCount"></span></div>
+      <div class="card" style="padding:4px"><div class="events" id="allEvents" style="max-height:calc(100vh - 220px)"></div></div>`;
+  },
+
+  async inbox() {
+    const reqs = await api("/inbox");
+    return `<h2>Inbox</h2><p class="muted">Questions, approvals and escalations waiting on a person. Answering resumes the objective's run.</p>
+      ${reqs.length ? reqs.map(reqCard).join("") : `<p class="muted">Inbox empty.</p>`}`;
+  },
+
+  async team() {
+    return `<h2>Team</h2><p class="muted mono">${esc(O.team.path)} · PM: ${esc(O.team.pm)}</p>
+      ${O.team.agents.map(a => `<div class="card"><strong>${esc(a.name)}</strong> ${a.name === O.team.pm ? st("PM") : ""}
+        <div>${a.capabilities.map(c => `<span class="chip">${esc(c)}</span>`).join(" ")}</div>
+        <div class="muted" style="margin-top:6px">${esc(a.description)}</div></div>`).join("")}`;
+  },
+
+  async plan() {
+    const ex = await api("/examples");
+    return `<h2>Plan check</h2><p class="muted">Validate a plan (YAML or JSON) against the structural rules and the fintech_sdlc policy pack.</p>
+      <div class="card"><div class="row">Load example: ${Object.keys(ex).map(n => `<button onclick='$("#planText").value = ${esc(JSON.stringify(ex[n]))}'>${esc(n)}</button>`).join("")}</div>
+      <textarea id="planText" rows="18" style="margin-top:10px"></textarea>
+      <div class="row" style="margin-top:10px"><button class="primary" onclick="checkPlan()">Check plan</button></div>
+      <div id="planOut"></div></div>`;
+  },
+
+  async admin() {
+    const k = (await api("/settings")).api_key;
+    return `<h2>Admin</h2>
+      <div class="card"><strong>Model API key</strong>
+        <p class="muted">Used by every agent (MODEL_API_KEY). Saved to <span class="mono">${esc(k.env_file)}</span>,
+          readable only by you and never committed. The page never shows the key itself.</p>
+        <div class="row"><span>Status:</span> ${k.set ? `<span class="chip s-true">set</span> <span class="mono">${esc(k.hint)}</span> <span class="muted">from ${esc(k.source)}</span>`
+          : `<span class="chip s-WAITING_HUMAN">not set</span> <span class="muted">only the offline demo works</span>`}</div>
+        ${k.env_overrides_file ? `<p class="s-WAITING_HUMAN">MODEL_API_KEY is set in the environment the UI was started from, and it wins over .env.
+          Changes here apply once you start the UI without it.</p>` : ""}
+        <div class="row" style="margin-top:10px;flex-wrap:nowrap">
+          <input id="apiKey" type="password" autocomplete="off" placeholder="${k.set ? "Paste a new key to replace it" : "Paste your key"}">
+          <button class="primary" onclick="saveKey()">Save</button>
+          ${k.source === ".env" ? `<button class="danger" onclick="removeKey()">Remove</button>` : ""}</div>
+        <p class="muted" style="font-size:12px">Takes effect for the next run or chat message; no restart needed.</p></div>
+      <div class="card"><div class="muted">Data folder</div><div class="mono">${esc(O.data_dir)}</div></div>
+      <div class="card"><strong>Delete</strong><p class="muted">Remove what orch created. The database stays while the UI holds it open
+        (stop the UI and run <span class="mono">uv run orch nuke db</span>).</p>
+        <div class="row"><button class="danger" onclick="nuke('spike')">Delete spike results</button>
+        <button class="danger" onclick="nuke('repos')">Delete target repos and worktrees</button></div></div>
+      <div class="card"><strong>CLI equivalents</strong><pre class="box">uv run orch run "objective" --ac "criterion"
+uv run orch run --resume &lt;objective&gt;
+uv run orch inbox / answer &lt;id&gt; &lt;response&gt; / approve &lt;id&gt;
+uv run orch evidence &lt;objective&gt;
+uv run python -m orch.runtime.spike --offline</pre></div>`;
+  },
+};
+
+function chatHtml(p) {
+  const pid = p.id;
+  return `<div class="chat-head">
+      <div style="min-width:0"><strong>${esc(p.name)}</strong>
+        <div class="muted" style="font-size:12px">Talking to the PM · spent <span id="spent">${money(p.spent_usd)}</span> of $${p.budget_usd.toFixed(2)}</div></div>
+      <div class="row" style="margin-left:auto;flex-wrap:nowrap">
+        <button onclick="toggleFiles('${pid}')" id="filesBtn">Files</button>
+        <a class="btn" href="#/project/${pid}/details" style="text-decoration:none;white-space:nowrap">Project details</a></div></div>
+    <div class="chat-body">
+      <div class="chat-col">
+        <div class="thread" id="thread"><p class="muted">Loading…</p></div>
+        <div class="working" id="working"></div>
+        <div class="composer">
+          <div class="row" style="flex-wrap:nowrap;align-items:flex-end">
+            <textarea id="say" rows="2" placeholder="Message the PM…"></textarea>
+            <button class="primary" id="sendBtn" onclick="send('${pid}')">Send</button></div>
+          <div class="row muted" style="font-size:12px;margin-top:6px">
+            <span id="mode"></span>
+            <details class="opts" style="margin-left:auto"><summary>Run settings</summary>
+              <div class="grid2">
+                <div><label>Model</label><select id="oModel">${O.models.map(m => `<option ${m === O.default_model ? "selected" : ""}>${m}</option>`).join("")}</select></div>
+                <div><label>Agents at once</label><input id="oPar" type="number" min="1" value="3"></div>
+                <div><label>&nbsp;</label><label style="display:flex;gap:6px;align-items:center;color:var(--ink)">
+                  <input id="oOff" type="checkbox" style="width:auto"> Offline scripted demo (minibank projects; no chat, the message is the objective)</label></div>
+              </div></details></div>
+        </div>
+      </div>
+      <div class="files" id="filesPanel" ${filesOpen() ? "" : "hidden"}>
+        <div class="row" style="justify-content:space-between"><strong>Files</strong>
+          <button title="Upload files into the repo" onclick="$('#upFiles').click()">↑ Upload</button></div>
+        <div class="row muted" style="font-size:12px;margin-top:6px;flex-wrap:nowrap">into
+          <input id="upFolder" value="data" style="padding:2px 6px;font-size:12px"></div>
+        <input type="file" id="upFiles" multiple hidden onchange="uploadFiles('${pid}')">
+        <div id="fileList" style="margin-top:10px" class="muted">Loading…</div>
+      </div>
+    </div>`;
+}
+
+function detailsHtml(p) {
+  const pid = p.id;
+  return `<a href="#/project/${pid}" class="muted">← back to the chat</a>
+    <div class="row" style="justify-content:space-between;margin-top:6px">
+      <div><h2>${esc(p.name)}: project details</h2><div class="muted mono">${esc(p.id)} · ${esc(p.repo_path)} · ${esc(p.policy_pack)}</div></div>
+      <div class="row"><button onclick="verifyChain('${pid}')">Verify event chain</button>
+      <a class="btn" href="#/events?project=${pid}" style="text-decoration:none">Events</a></div></div>
+    <div class="card row" style="margin-top:14px">
+      <span>Spent <strong id="spent">${money(p.spent_usd)}</strong> of <strong>$${p.budget_usd.toFixed(2)}</strong></span>
+      <input id="budget" type="number" step="0.5" style="width:110px" value="${p.budget_usd}">
+      <button onclick="setBudget('${pid}')">Set budget</button>
+    </div>
+    <h3>Objectives</h3><div id="objList">${objectivesHtml(p)}</div>`;
+}
+
+const OPTION_LABELS = {approve: "Approve", reject: "Reject", override_approve: "Override and approve", fail: "Fail it", cancel: "Cancel"};
+let chatSig = "", chatMode = {kind: "chat"}, askInstead = false;
+
+function filesOpen() { try { return localStorage.getItem("orch.files") === "1"; } catch { return false; } }
+function toggleFiles(pid) {
+  const panel = $("#filesPanel"); panel.hidden = !panel.hidden;
+  try { localStorage.setItem("orch.files", panel.hidden ? "0" : "1"); } catch {}
+  if (!panel.hidden) loadFiles(pid);
+}
+
+function msgHtml(m, objectives) {
+  const who = m.role === "user" ? "You" : m.actor === "system" ? "orch" : "PM";
+  const req = m.request;
+  let extra = "";
+  if (m.steps) {
+    const crit = Object.entries(m.criteria || {});
+    if (crit.length) extra += `<details><summary>${crit.length} acceptance criteria</summary>${crit.map(([k, v]) => `<div style="margin-top:4px"><strong>${esc(k)}</strong> ${esc(v)}</div>`).join("")}</details>`;
+  } else if (m.plan && m.plan.length) {
+    extra += `<ol>${m.plan.map(t => `<li><span class="mono">${esc(t.node)}</span> <span class="muted">${esc(t.kind)}${t.assignee ? " · " + esc(t.assignee) : ""}</span></li>`).join("")}</ol>`;
+    const crit = Object.entries(m.criteria || {});
+    if (crit.length) extra += `<details><summary>${crit.length} acceptance criteria</summary>${crit.map(([k, v]) => `<div style="margin-top:4px"><strong>${esc(k)}</strong> ${esc(v)}</div>`).join("")}</details>`;
+  }
+  let acts = "";
+  if (req && req.open && req.options.length)
+    acts = `<div class="acts">${req.options.map(o => `<button class="${["approve", "override_approve"].includes(o) ? "primary" : ""}" onclick="answer('${req.id}', ${esc(JSON.stringify(o))})">${esc(OPTION_LABELS[o] || o)}</button>`).join("")}</div>`;
+  else if (req && req.open) acts = `<div class="acts muted" style="font-size:12px">Reply below.</div>`;
+  const cls = `msg ${m.role}${req && req.open ? " ask" : ""}`;
+  const wf = m.steps ? stepsHtml(m.steps) : "";
+  let html = `<div class="${cls}"><div class="who">${who}${req ? " · " + esc(req.kind) : ""}</div><div class="bubble">${esc(m.text)}${extra}</div>${wf}${acts}</div>`;
+  if (m.starts_objective) {
+    const o = objectives.find(x => x.id === m.root_id);
+    html = `<div class="divider">New objective · ${o ? st(o.status) : ""} <a href="#/objective/${m.root_id}">tasks and evidence</a></div>` + html;
+  }
+  return html;
+}
+
+const STEP_LABEL = {done: "done", failed: "failed", running: "working", checking: "in checks and review",
+  needs_you: "waiting for you", queued: "up next", rerun: "will re-run", waiting: "not started", canceled: "canceled"};
+const openSteps = new Set();
+
+function fmtDur(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+  return `${Math.floor(s / 3600)}h ${Math.floor(s / 60) % 60}m`;
+}
+function durAttrs(start, end) { return start ? `data-start="${esc(start)}"${end ? ` data-end="${esc(end)}"` : ""}` : ""; }
+function tickDurations() {
+  document.querySelectorAll(".dur[data-start]").forEach(el => {
+    const end = el.dataset.end ? Date.parse(el.dataset.end) : Date.now();
+    el.textContent = fmtDur(end - Date.parse(el.dataset.start));
+  });
+}
+setInterval(tickDurations, 1000);
+
+function stepsHtml(steps) {
+  const done = steps.filter(x => x.state === "done").length;
+  const live = steps.some(x => ["running", "checking", "needs_you", "queued"].includes(x.state));
+  const first = steps.find(x => x.started), last = steps.map(x => x.ended).filter(Boolean).sort().pop();
+  const head = `<div class="wf-head"><span>${done} of ${steps.length} steps done</span>
+    <span class="dur" ${first ? durAttrs(first.started, live ? null : last) : ""}></span></div>`;
+  return `<div class="wf">${head}${steps.map(x => {
+    const sub = [x.assignee, STEP_LABEL[x.state], x.note].filter(Boolean).map(esc).join(" · ");
+    const log = x.log.map(l => `<div><span class="mono">${esc(new Date(l.ts).toLocaleTimeString([], {hour12: false}))}</span> ${esc(l.text)}</div>`).join("");
+    return `<details class="st-${x.state}" data-step="${x.id}" ${openSteps.has(x.id) ? "open" : ""}
+      ontoggle="this.open ? openSteps.add(this.dataset.step) : openSteps.delete(this.dataset.step)">
+      <summary><span class="ic"></span><span class="nm">${esc(x.node)}</span><span class="sub">${sub}</span>
+      <span class="dur" ${durAttrs(x.started, x.ended)}></span></summary>${log ? `<div class="log">${log}</div>` : ""}</details>`;
+  }).join("")}</div>`;
+}
+
+function threadHtml(messages, objectives) {
+  const out = [];
+  for (let i = 0; i < messages.length;) {
+    if (messages[i].role !== "activity") { out.push(msgHtml(messages[i], objectives)); i++; continue; }
+    let j = i; while (j < messages.length && messages[j].role === "activity") j++;
+    const run = messages.slice(i, j);
+    out.push(run.length === 1 ? `<div class="activity">${esc(run[0].text)}</div>`
+      : `<details class="activity"><summary>${esc(run[run.length - 1].text)} · ${run.length} updates</summary>${run.map(a => `<div>${esc(a.text)}</div>`).join("")}</details>`);
+    i = j;
+  }
+  if (!messages.some(m => m.starts_objective))
+    out.push(`<div class="activity" style="margin-top:12px">Ask the PM anything about the project, or say what you want built.
+      For new work it reads the repo (including files you upload), drafts acceptance criteria and checks them with you before planning.</div>`);
+  return out.join("");
+}
+
+async function loadChat(pid) {
+  const box = $("#thread"); if (!box) return;
+  const data = await api(`/projects/${pid}/chat`);
+  const p = P.find(x => x.id === pid);
+  const sig = JSON.stringify([data.messages, p && p.objectives.map(o => o.status)]);
+  if (sig !== chatSig) {
+    const atBottom = !chatSig || box.scrollHeight - box.scrollTop - box.clientHeight < 60;
+    chatSig = sig;
+    box.innerHTML = threadHtml(data.messages, p ? p.objectives : []);
+    tickDurations();
+    if (atBottom) box.scrollTop = box.scrollHeight;
+  }
+  $("#working").innerHTML = data.working.map(w => `<div><span class="dot"></span>${esc(w)}…</div>`).join("") ||
+    (data.running.length ? `<div><span class="dot"></span>the team is working…</div>` : "");
+  const open = data.open_requests, q = open.find(r => !r.options.length);
+  const thinking = data.working.some(w => w.startsWith("the PM is writing"));
+  if (!q) askInstead = false;
+  chatMode = q && !askInstead ? {kind: "answer", id: q.id, text: "Your message answers the PM's question above."}
+    : {kind: "chat", text: askInstead ? "Your message is a new question for the PM, not an answer."
+        : open.length ? "A decision is waiting above. You can still ask the PM anything."
+        : data.running.length ? "The team is working. Ask the PM anything; you'll be asked here when they need you."
+        : "Ask the PM about the project, or tell it what to build."};
+  $("#mode").innerHTML = esc(chatMode.text) + (q ? ` <a href="#" onclick="askInstead = !askInstead; loadChat('${pid}'); return false">${
+    askInstead ? "Answer its question instead" : "Ask something else instead"}</a>` : "");
+  $("#say").disabled = thinking; $("#sendBtn").disabled = thinking;
+  $("#say").placeholder = thinking ? "The PM is replying…" : chatMode.kind === "answer" ? "Reply to the PM…" : "Message the PM…";
+  if ($("#spent") && p) $("#spent").textContent = money(p.spent_usd);
+}
+
+async function send(pid) {
+  const text = $("#say").value.trim();
+  if (!text) return;
+  $("#sendBtn").disabled = true;
+  try {
+    if (chatMode.kind === "answer") await api(`/requests/${chatMode.id}/answer`, {response: text});
+    else await api(`/projects/${pid}/say`, {text, model: $("#oModel").value,
+      parallel: $("#oPar").value, offline: $("#oOff").checked});
+    $("#say").value = "";
+    await render();
+  } catch (e) { toast("Error: " + e.message, 8000); }
+  finally { $("#sendBtn").disabled = false; }
+}
+
+async function previewFile(pid, path) {
+  try { const f = await api(`/projects/${pid}/files/content?path=${encodeURIComponent(path)}`);
+    showDialog(`<div class="row" style="justify-content:space-between"><h2 class="mono" style="font-size:15px">${esc(f.path)}</h2>
+      <button onclick="dlg.close(); useFile(${esc(JSON.stringify(f.path))})">Mention in chat</button></div>
+      <div class="muted">${f.bytes.toLocaleString()} bytes${f.truncated ? " · showing the first 200 KB" : ""}</div>
+      <pre class="box" style="max-height:65vh">${esc(f.text)}</pre>`);
+  } catch (e) { toast("Error: " + e.message); }
+}
+
+function objectivesHtml(p) {
+  return p.objectives.length ? `<div class="card" style="padding:0"><table><tr><th>objective</th><th>status</th><th>run</th><th>created</th></tr>
+        ${p.objectives.map(o => `<tr class="click" onclick="go('#/objective/${o.id}')">
+          <td>${esc(o.title)}<div class="muted mono">${o.id}</div></td><td>${st(o.status)}</td>
+          <td>${o.run ? st(o.run.state) : `<span class="muted">-</span>`}</td><td class="muted">${esc(o.created_at.slice(0, 19))}</td></tr>`).join("")}
+      </table></div>` : `<p class="muted">Nothing built yet.</p>`;
+}
+
+function reqCard(r) {
+  const opts = r.options && r.options.length
+    ? r.options.map(o => `<button class="${o === "approve" ? "primary" : ""}" onclick="answer('${r.id}', ${esc(JSON.stringify(o))})">${esc(o)}</button>`).join("")
+    : `<input id="ans-${r.id}" placeholder="your answer" style="max-width:520px"><button class="primary" onclick="answer('${r.id}')">Send</button>`;
+  return `<div class="card req"><div class="row" style="justify-content:space-between"><span>${st(r.kind)} <a href="#/objective/${r.root_id}" class="mono muted">${r.root_id}</a></span><span class="mono muted">${r.id}</span></div>
+    <div style="white-space:pre-wrap;margin:8px 0">${esc(r.prompt)}</div><div class="row">${opts}</div></div>`;
+}
+
+// ------------------------------------------------------------------ events
+
+function evSummary(e) {
+  const p = e.payload || {};
+  switch (e.type) {
+    case "task.status": return `${p.from} → ${p.to} ${p.reason || ""}`;
+    case "plan.rejected": return `plan v${p.version} rejected: ${[...new Set((p.errors || []).map(x => x.code))].join(", ")}`;
+    case "plan.accepted": return `plan v${p.version} accepted: ${(p.tasks || []).length} tasks`;
+    case "human.requested": return `asks: ${p.prompt || ""}`;
+    case "human.responded": return `answered: ${p.response}`;
+    case "run.usage": return `${(p.tokens || 0).toLocaleString()} tokens ${money(p.usd)}`;
+    case "artifact.added": return `${p.name} (${p.kind}, ${p.bytes} bytes)`;
+    default: return JSON.stringify(p).slice(0, 160);
+  }
+}
+function evRow(e) {
+  return `<div onclick="this.querySelector('pre') ? this.querySelector('pre').remove() : this.insertAdjacentHTML('beforeend', '<pre>' + esc(JSON.stringify(${esc(JSON.stringify(e))}, null, 2)) + '</pre>')">
+    <span class="muted">#${e.seq}</span><span class="muted">${esc(e.ts.slice(11, 19))}</span><span>${esc(e.node)}</span>
+    <span class="muted">${esc(e.actor)}</span><span>${esc(e.type)}</span><span>${esc(evSummary(e))}</span></div>`;
+}
+async function pollEvents(boxId, query, reset) {
+  const box = $("#" + boxId); if (!box) return;
+  if (reset) { evAfter = 0; evRows = []; box.innerHTML = ""; }
+  const rows = await api(`/events?after=${evAfter}&limit=2000&${query}`);
+  if (!rows.length && !reset) return;
+  evRows.push(...rows); if (rows.length) evAfter = rows[rows.length - 1].seq;
+  const f = ($("#fText")?.value || "").toLowerCase();
+  const shown = f ? evRows.filter(e => JSON.stringify(e).toLowerCase().includes(f)) : evRows;
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  box.innerHTML = shown.map(evRow).join("") || `<p class="muted" style="padding:8px">No events.</p>`;
+  if ($("#evCount")) $("#evCount").textContent = `${shown.length} of ${evRows.length}`;
+  if (atBottom || reset || $("#fFollow")?.checked) box.scrollTop = box.scrollHeight;
+}
+
+// ------------------------------------------------------------------ actions
+
+async function createProject() {
+  const r = await act(() => api("/projects", {name: $("#pName").value, repo: $("#pRepo").value, starter: $("#pStarter").value, budget: $("#pBudget").value}), "Project created");
+  if (r) go(`#/project/${r.id}`);
+}
+async function loadFiles(pid) {
+  const box = $("#fileList"); if (!box || $("#filesPanel")?.hidden) return;
+  try {
+    const files = await api(`/projects/${pid}/files`);
+    const starter = f => /^(minibank|tests)\//.test(f.path) || ["README.md", "pyproject.toml", ".gitignore"].includes(f.path);
+    const size = b => b == null ? "" : b < 1024 ? b + " B" : (b / 1024).toFixed(1) + " KB";
+    const row = f => `<div class="f" onclick="previewFile('${pid}', ${esc(JSON.stringify(f.path))})" title="Preview">
+      <span style="min-width:0">${esc(f.path.split("/").pop())}${f.path.includes("/") ? `<div class="muted" style="font-size:11px">${esc(f.path.split("/").slice(0, -1).join("/"))}/</div>` : ""}</span>
+      <span class="row" style="flex-wrap:nowrap;gap:4px;flex:none"><span class="muted">${size(f.bytes)}</span>
+      <button title="Mention in the chat" onclick="event.stopPropagation(); useFile(${esc(JSON.stringify(f.path))})">@</button></span></div>`;
+    const mine = files.filter(f => !starter(f)), rest = files.filter(starter);
+    box.innerHTML = (mine.length ? mine.map(row).join("") : `<div>No uploads yet. Use ↑ Upload to add CSVs.</div>`) +
+      (rest.length ? `<details style="margin-top:8px"><summary>${rest.length} starter / code files</summary>${rest.map(row).join("")}</details>` : "");
+  } catch (e) { box.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+}
+function useFile(path) {
+  const t = $("#say"); if (!t || t.disabled) return toast("Mention files when you write to the PM");
+  t.value = (t.value.trim() ? t.value.trim() + " " : "") + path; t.focus();
+}
+async function uploadFiles(pid) {
+  const files = $("#upFiles").files;
+  if (!files.length) return;
+  const form = new FormData();
+  form.append("folder", $("#upFolder").value);
+  for (const f of files) form.append("files", f);
+  try {
+    const r = await fetch(`/api/projects/${pid}/files`, {method: "POST", body: form});
+    const j = await r.json().catch(() => ({error: r.statusText}));
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    toast(j.commit ? `Uploaded and committed ${j.files.join(", ")}` : `${j.files.join(", ")} already up to date`, 6000);
+    $("#upFiles").value = "";
+    await loadFiles(pid);
+  } catch (e) { toast("Error: " + e.message, 8000); }
+}
+const setBudget = pid => act(() => api(`/projects/${pid}/budget`, {budget: $("#budget").value}), "Budget updated");
+const resume = root => act(() => api(`/objectives/${root}/resume`, {}), "Run started");
+async function cancelTask(tid) {
+  if (!confirm("Cancel this task and everything that depends on it?")) return;
+  await act(() => api(`/tasks/${tid}/cancel`, {}), "Canceled");
+}
+async function answer(rid, value) {
+  const response = value ?? $("#ans-" + rid).value;
+  if (!response) return toast("Type an answer first");
+  const r = await act(() => api(`/requests/${rid}/answer`, {response}));
+  if (r) toast(`Answered (${r.status})${r.resumed ? "; run resumed" : ""}`);
+}
+async function verifyChain(pid) {
+  try { const r = await api(`/projects/${pid}/verify`);
+    toast(r.ok ? `Event chain intact: ${r.count} events` : `Chain BROKEN at seq ${r.first_bad_seq}: ${r.reason}`, 6000);
+  } catch (e) { toast("Error: " + e.message); }
+}
+async function showEvidence(root) {
+  try { const r = await api(`/objectives/${root}/evidence`);
+    showDialog(`<h2>Evidence pack</h2><div class="muted mono">${esc(r.path)}</div><pre class="box" style="max-height:70vh">${esc(r.markdown)}</pre>`);
+  } catch (e) { toast("Error: " + e.message); }
+}
+async function showTask(tid) {
+  try { const t = await api(`/tasks/${tid}`);
+    const done = ["DONE", "FAILED", "CANCELED"].includes(t.status);
+    showDialog(`<div class="row" style="justify-content:space-between"><h2>${esc(t.node || "objective")} <span class="muted">${esc(t.kind)}</span></h2>
+      ${done ? "" : `<button class="danger" onclick="dlg.close(); cancelTask('${t.id}')">Cancel task</button>`}</div>
+      <div class="row">${st(t.status)} ${t.outcome ? st(t.outcome) : ""} <span class="muted">${esc(t.assignee || "")} · attempt ${t.attempt} · round ${t.revision_round}</span></div>
+      <p>${esc(t.title)}</p>
+      ${t.paths.length ? `<div class="muted">writes: <span class="mono">${t.paths.map(esc).join(", ")}</span></div>` : ""}
+      ${t.gates.length ? `<div class="muted">gates: ${t.gates.map(esc).join(", ")}</div>` : ""}
+      ${t.depends_on.length ? `<div class="muted">depends on: <span class="mono">${t.depends_on.map(d => esc(d.on + " (" + d.kind + ")")).join(", ")}</span></div>` : ""}
+      ${t.summary ? `<h3>Summary</h3><pre class="box">${esc(t.summary)}</pre>` : ""}
+      ${t.answers.length ? `<h3>Human answers</h3><pre class="box">${esc(JSON.stringify(t.answers, null, 2))}</pre>` : ""}
+      ${Object.values(t.feedback || {}).some(v => v && v.length) ? `<h3>Feedback</h3><pre class="box">${esc(JSON.stringify(t.feedback, null, 2))}</pre>` : ""}
+      ${t.diff ? `<h3>Diff</h3><pre class="box">${esc(t.diff)}</pre>` : ""}`);
+  } catch (e) { toast("Error: " + e.message); }
+}
+async function checkPlan() {
+  try { const r = await api("/plan-check", {plan: $("#planText").value});
+    $("#planOut").innerHTML = r.ok ? `<p class="s-DONE">Plan cleared: ${r.nodes} nodes, ${r.edges} edges</p>`
+      : `<p class="s-FAILED">Plan rejected: ${r.errors.length} error(s)</p>` + r.errors.map(e =>
+        `<div class="mono">${esc(e.text)}${e.escalate ? ` <span class="s-WAITING_HUMAN">[needs a human]</span>` : ""}${e.hint ? `<div class="muted">  hint: ${esc(e.hint)}</div>` : ""}</div>`).join("");
+  } catch (e) { $("#planOut").innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+}
+async function saveKey() {
+  const key = $("#apiKey").value.trim();
+  if (!key) return toast("Paste the key first");
+  const r = await act(() => api("/settings/api-key", {key}));
+  if (r) { $("#apiKey").value = ""; toast(`Key saved (${r.api_key.hint})`); lastRoute = ""; render(); }
+}
+async function removeKey() {
+  if (!confirm("Remove the API key from .env? Live runs and the PM chat stop working until you add one.")) return;
+  const r = await act(() => api("/settings/api-key", {remove: true}));
+  if (r) { toast("Key removed"); lastRoute = ""; render(); }
+}
+async function nuke(section) {
+  if (!confirm(`Delete ${section}? This cannot be undone.`)) return;
+  const r = await act(() => api("/nuke", {section}));
+  if (r) toast(r.deleted.length ? "Deleted " + r.deleted.join(", ") : "Nothing to delete");
+}
+
+// ------------------------------------------------------------------ router
+
+let lastRoute = "";
+async function render() {
+  const [path, query] = location.hash.slice(1).split("?");
+  const [, name = "", arg, sub] = (path || "/").split("/");
+  const isChat = name === "project" && sub !== "details";
+  $("#view").classList.toggle("chat-mode", isChat);
+  const route = location.hash;
+  const fresh = route !== lastRoute; lastRoute = route;
+  // Don't clobber a form the user is typing into.
+  const typing = document.activeElement && ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName);
+  try {
+    await refreshChrome();
+    if (name === "events") {
+      if (fresh) {
+        $("#view").innerHTML = await views.events(query);
+        const reload = () => { const p = $("#fProject").value; history.replaceState(null, "", `#/events${p ? "?project=" + p : ""}`); lastRoute = location.hash; pollEvents("allEvents", p ? "project=" + p : "", true); };
+        $("#fProject").onchange = reload;
+        $("#fText").oninput = () => { const box = $("#allEvents"); const f = $("#fText").value.toLowerCase();
+          const shown = f ? evRows.filter(e => JSON.stringify(e).toLowerCase().includes(f)) : evRows;
+          box.innerHTML = shown.map(evRow).join(""); $("#evCount").textContent = `${shown.length} of ${evRows.length}`; };
+        await pollEvents("allEvents", new URLSearchParams(query || "").get("project") ? "project=" + new URLSearchParams(query).get("project") : "", true);
+      } else {
+        await pollEvents("allEvents", $("#fProject").value ? "project=" + $("#fProject").value : "", false);
+      }
+      return;
+    }
+    if (!fresh && !isChat && (typing || ["new", "plan", "admin", "team"].includes(name))) return;
+    if (!fresh && isChat) return loadChat(arg);  // keep the composer; refresh the thread
+    if (!fresh && name === "project") {  // details: keep the budget field; refresh the list
+      const p = P.find(x => x.id === arg);
+      if (p) { $("#objList").innerHTML = objectivesHtml(p); $("#spent").textContent = money(p.spent_usd); }
+      return;
+    }
+    const fn = views[name];
+    if (!fn) { $("#view").innerHTML = `<p>Not found.</p>`; return; }
+    const scroll = $("#objEvents")?.scrollTop;
+    const html = await fn(arg, sub);
+    if (html !== undefined) $("#view").innerHTML = html;
+    if (isChat) {
+      chatSig = "";
+      $("#say").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(arg); } });
+      await loadChat(arg); loadFiles(arg);
+    }
+    if (name === "objective") {
+      await pollEvents("objEvents", "root=" + arg, true);
+      if (!fresh && scroll !== undefined) $("#objEvents").scrollTop = scroll;
+    }
+  } catch (e) { $("#view").innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+}
+window.addEventListener("hashchange", render);
+render();
+setInterval(() => { if (!document.hidden && !dlg.open) render(); }, 2500);
+</script>
+</body>
+</html>

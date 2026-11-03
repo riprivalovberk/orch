@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections import defaultdict, deque
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
+from fnmatch import fnmatchcase
 from graphlib import CycleError, TopologicalSorter
 
 from orch.core.team import TeamRegistry
@@ -146,6 +147,35 @@ def str_001_acyclic(g: PlanGraph, ctx: ValidationContext) -> Iterable[PlanError]
         )
 
 
+def str_006_no_deadlock(g: PlanGraph, ctx: ValidationContext) -> Iterable[PlanError]:
+    """No task may end up waiting on itself through verification.
+
+    STR-001 only sees edges. At run time a task waits at two points: it starts once its
+    blocks sources are DONE and its verifies sources are submitted, and it is DONE once
+    its own verifiers are. So a verifier checking both a task and something that task
+    blocks never runs: e.g. tests -> impl (blocks) with a gate verifying both.
+    """
+    deps: dict[tuple[str, str], list[tuple[str, str]]] = {}
+    for n in g.nodes:
+        deps[(n, "start")] = [
+            (e.source, "done" if e.kind == EdgeKind.BLOCKS else "start") for e in g.inc[n]
+        ]
+        deps[(n, "done")] = [(n, "start")] + [(v.id, "done") for v in g.verifiers_of(n)]
+    try:
+        TopologicalSorter(deps).prepare()
+    except CycleError as exc:
+        cycle: list[tuple[str, str]] = exc.args[1]
+        names = list(dict.fromkeys(node for node, _ in cycle))
+        verifier = next((n for n in names if g.nodes[n].kind in VERIFIER_KINDS), names[0])
+        yield err(
+            "STR-006",
+            verifier,
+            "these tasks would wait on each other forever: " + ", ".join(names),
+            f"{verifier} cannot verify a task and also work that task blocks; give each "
+            "its own verifier, or verify only the later work",
+        )
+
+
 def str_003_assignees(g: PlanGraph, ctx: ValidationContext) -> Iterable[PlanError]:
     for n in g.nodes.values():
         if n.kind in UNASSIGNED_KINDS:
@@ -254,11 +284,40 @@ def str_005_shapes(g: PlanGraph, ctx: ValidationContext) -> Iterable[PlanError]:
             )
 
 
+def _overlap(a: str, b: str) -> bool:
+    """Two paths or globs that could name the same file."""
+    return a == b or fnmatchcase(a, b) or fnmatchcase(b, a)
+
+
+def par_001_parallel_writes(g: PlanGraph, ctx: ValidationContext) -> Iterable[PlanError]:
+    """Work nodes that can run at the same time must not write the same files.
+
+    Each runs in its own worktree and is merged when done, so overlapping paths would
+    conflict at merge time. Two nodes are ordered if either is reachable from the other.
+    """
+    writers = [n for n in g.of_kind(TaskKind.TEST, TaskKind.IMPLEMENT) if n.paths]
+    reach = {n.id: g.reachable_from(n.id) for n in writers}
+    for i, a in enumerate(writers):
+        for b in writers[i + 1 :]:
+            if b.id in reach[a.id] or a.id in reach[b.id]:
+                continue
+            shared = sorted({p for p in a.paths for q in b.paths if _overlap(p, q)})
+            if shared:
+                yield err(
+                    "PAR-001",
+                    b.id,
+                    f"{a.id} and {b.id} can run at the same time and both write {shared[0]}",
+                    f"add a blocks edge from {a.id} to {b.id}, or give them separate paths",
+                )
+
+
 STRUCTURAL_RULES: tuple[Rule, ...] = (
     str_001_acyclic,
     str_003_assignees,
     str_004_limits,
     str_005_shapes,
+    str_006_no_deadlock,
+    par_001_parallel_writes,
 )
 
 

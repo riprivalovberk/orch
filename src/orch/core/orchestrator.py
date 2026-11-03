@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from orch.core.events import EventLog, VerifyResult
@@ -23,6 +24,8 @@ from orch.core.state import IllegalTransition, assert_transition
 from orch.core.team import TeamRegistry
 from orch.db.models import (
     Agent,
+    Artifact,
+    Event,
     GateResult,
     HumanRequest,
     PlanRecord,
@@ -31,6 +34,7 @@ from orch.db.models import (
     Run,
     Task,
     TaskDep,
+    ToolCall,
 )
 from orch.domain.enums import (
     PASSING_OUTCOMES,
@@ -46,7 +50,7 @@ from orch.domain.enums import (
 )
 from orch.domain.schemas import GateResultIn, Plan, PlanError, ProjectLimits, ReviewVerdict
 from orch.ids import new_id, now_iso
-from orch.policies import get_pack
+from orch.policies import get_pack, get_standards
 
 S = TaskStatus
 SYSTEM = "system"
@@ -462,12 +466,76 @@ class TaskOrchestrator:
             if run is None or run.ended_at is not None:
                 return None
             t = self._task(s, run.task_id)
+            agent = s.scalar(
+                select(Agent).where(Agent.project_id == t.project_id, Agent.name == t.assignee)
+            )
             return {
                 "run_id": run.id,
                 "task_id": t.id,
                 "project_id": t.project_id,
                 "agent": t.assignee,
                 "kind": t.kind,
+                "tools": list(agent.tools) if agent else [],
+                "write_paths": list(agent.write_paths) if agent else [],
+                "paths": list(t.paths),
+            }
+
+    def begin_tool_call(
+        self, run_id: str, task_id: str, key: str, tool: str, args: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Log a tool call before it acts. A key seen before returns its stored result
+        (a client retry must not submit a plan or write a file twice); None means go ahead.
+
+        Status: started -> ok | error (stored and replayed) | failed (an internal error that
+        committed nothing, so a retry with the same key runs again).
+        """
+        try:
+            with self.tx() as s:
+                prev = s.scalar(select(ToolCall).where(ToolCall.idempotency_key == key))
+                if prev is None:
+                    s.add(
+                        ToolCall(
+                            id=new_id("tcl"),
+                            task_id=task_id,
+                            run_id=run_id,
+                            idempotency_key=key,
+                            tool=tool,
+                            args=args,
+                            status="started",
+                        )
+                    )
+                    return None
+                if prev.tool != tool or prev.args != args:
+                    raise InvalidOperation(
+                        f"tool call id {key} was already used for a different call"
+                    )
+                if prev.status == "started":
+                    raise InvalidOperation(f"tool call {key} is still running")
+                if prev.status == "failed":
+                    prev.status, prev.result, prev.run_id = "started", None, run_id
+                    return None
+                return {"status": prev.status, "result": prev.result}
+        except IntegrityError as e:  # the same key inserted concurrently by another request
+            raise InvalidOperation(f"tool call {key} is still running") from e
+
+    def end_tool_call(self, key: str, status: str, result: Any) -> None:
+        """Store what a tool call returned ("ok") or the error it raised ("error")."""
+        with self.tx() as s:
+            s.execute(
+                update(ToolCall)
+                .where(ToolCall.idempotency_key == key)
+                .values(status=status, result=result)
+            )
+
+    def remaining_budget(self, project_id: str) -> dict[str, float]:
+        """Budget left in USD, as the PM sees it before planning more work."""
+        with self.tx() as s:
+            p = self._project(s, project_id)
+            return {
+                "budget_usd": p.limits.budget_usd,
+                "spent_usd": round(p.spent_usd, 6),
+                "remaining_usd": round(p.limits.budget_usd - p.spent_usd, 6),
+                "est_cost_per_task_usd": p.limits.est_cost_per_task_usd,
             }
 
     def record_usage(
@@ -492,6 +560,22 @@ class TaskOrchestrator:
                 {"tokens": tokens_in + tokens_out, "usd": cost_usd},
                 run_id=run.id,
                 actor=t.assignee or SYSTEM,
+            )
+
+    def record_chat_usage(
+        self, project_id: str, *, actor: str, tokens: int = 0, cost_usd: float = 0.0
+    ) -> None:
+        """Model usage outside any task (the PM answering in the chat), charged to the project."""
+        with self.tx() as s:
+            p = self._project(s, project_id)
+            p.spent_usd += cost_usd
+            p.spent_tokens += tokens
+            self.events.append(
+                s,
+                project_id=p.id,
+                type="chat.usage",
+                actor=actor,
+                payload={"tokens": tokens, "usd": cost_usd},
             )
 
     # ------------------------------------------------------------------ agent actions
@@ -548,12 +632,14 @@ class TaskOrchestrator:
     def record_review(
         self, review_task_id: str, verdict: ReviewVerdict, *, actor: str | None = None
     ) -> str:
-        """A reviewer's verdict. Blocking findings must cite an acceptance criterion."""
+        """A reviewer's verdict. Blocking findings must cite an acceptance criterion or one of
+        the policy pack's engineering standards."""
         with self.tx() as s:
             v = self._running(s, review_task_id)
             if v.kind not in REVIEW_KINDS:
                 raise InvalidOperation(f"{v.id} is a {v.kind} task, not a review")
-            criteria = self._root(s, v).acceptance_criteria or {}
+            standards = get_standards(self._project(s, v.project_id).policy_pack)
+            criteria = {**(self._root(s, v).acceptance_criteria or {}), **standards}
             if verdict.verdict == Verdict.REQUEST_CHANGES:
                 blocking = [f for f in verdict.findings if f.severity in ("blocker", "major")]
                 if not blocking:
@@ -563,8 +649,8 @@ class TaskOrchestrator:
                 uncited = [f.issue for f in blocking if f.criterion_id not in criteria]
                 if uncited:
                     raise InvalidOperation(
-                        "every blocker or major finding must cite an acceptance criterion "
-                        f"({sorted(criteria)}); missing on: {uncited}"
+                        "every blocker or major finding must cite an acceptance criterion or "
+                        f"a standard in criterion_id ({sorted(criteria)}); missing on: {uncited}"
                     )
             reviewer = actor or v.assignee or SYSTEM
             for target in self._verified_targets(s, v.id):
@@ -728,6 +814,292 @@ class TaskOrchestrator:
             )
             return [self._snapshot(s, t) for t in rows]
 
+    def project_for_repo(self, repo_path: str) -> str | None:
+        """The newest project for this target repo, so `orch run` reuses one per repo."""
+        with self.tx() as s:
+            return s.scalar(
+                select(Project.id)
+                .where(Project.repo_path == repo_path)
+                .order_by(Project.created_at.desc())
+                .limit(1)
+            )
+
+    def get_project(self, project_id: str) -> dict[str, Any]:
+        with self.tx() as s:
+            p = self._project(s, project_id)
+            return {
+                "id": p.id,
+                "name": p.name,
+                "repo_path": p.repo_path,
+                "policy_pack": p.policy_pack,
+                "budget_usd": p.limits.budget_usd,
+                "spent_usd": round(p.spent_usd, 6),
+            }
+
+    def get_project_pm(self, project_id: str) -> str:
+        """The name of the project's PM agent (who speaks for the team in the chat)."""
+        with self.tx() as s:
+            return self._project(s, project_id).pm_agent or SYSTEM
+
+    def set_budget(self, project_id: str, budget_usd: float) -> None:
+        """Change a project's total budget. It covers every objective run on the project."""
+        if budget_usd <= 0:
+            raise InvalidOperation("the budget must be more than $0")
+        with self.tx() as s:
+            p = self._project(s, project_id)
+            old = p.limits.budget_usd
+            p.limits = p.limits.model_copy(update={"budget_usd": budget_usd})
+            self.events.append(
+                s,
+                project_id=p.id,
+                type="project.budget",
+                actor=HUMAN,
+                payload={"from": old, "to": budget_usd},
+            )
+
+    def add_artifact(
+        self,
+        task_id: str,
+        *,
+        name: str,
+        kind: str,
+        sha256: str,
+        path: str,
+        size: int,
+        run_id: str | None = None,
+        actor: str | None = None,
+    ) -> str:
+        """Index a file an agent produced; the bytes are already stored at ``path``."""
+        with self.tx() as s:
+            t = self._task(s, task_id)
+            a = Artifact(
+                id=new_id("art"),
+                project_id=t.project_id,
+                task_id=t.id,
+                run_id=run_id,
+                name=name,
+                kind=kind,
+                sha256=sha256,
+                path=path,
+            )
+            s.add(a)
+            self._event(
+                s,
+                t,
+                "artifact.added",
+                {"name": name, "kind": kind, "sha256": sha256, "bytes": size},
+                run_id=run_id,
+                actor=actor or t.assignee or SYSTEM,
+            )
+            return a.id
+
+    def project_ids(self) -> list[str]:
+        with self.tx() as s:
+            return list(s.scalars(select(Project.id).order_by(Project.created_at)))
+
+    def objectives(self, project_id: str) -> list[dict[str, Any]]:
+        """The project's root tasks, newest first, with their criteria."""
+        with self.tx() as s:
+            rows = s.scalars(
+                select(Task)
+                .where(Task.project_id == project_id, Task.id == Task.root_id)
+                .order_by(Task.created_at.desc())
+            )
+            return [
+                {
+                    **self._snapshot(s, t),
+                    "objective": t.objective,
+                    "criteria": t.acceptance_criteria or {},
+                    "created_at": t.created_at,
+                }
+                for t in rows
+            ]
+
+    def list_events(
+        self,
+        *,
+        project_id: str | None = None,
+        root_id: str | None = None,
+        after: int = 0,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """Events after seq ``after``, oldest first: for one project, one objective, or all."""
+        with self.tx() as s:
+            q = select(Event).where(Event.seq > after)
+            if project_id:
+                q = q.where(Event.project_id == project_id)
+            if root_id:
+                ids = select(Task.id).where(Task.root_id == root_id)
+                q = q.where(Event.task_id.in_(ids))
+            events = s.scalars(q.order_by(Event.seq).limit(limit)).all()
+            ids = {e.task_id for e in events if e.task_id}
+            node = {
+                t.id: t.plan_node_id or "objective"
+                for t in s.scalars(select(Task).where(Task.id.in_(ids)))
+            }
+            return [
+                {
+                    "seq": e.seq,
+                    "ts": e.ts,
+                    "project_id": e.project_id,
+                    "task_id": e.task_id,
+                    "node": node.get(e.task_id or "", "-"),
+                    "actor": e.actor,
+                    "type": e.type,
+                    "payload": e.payload,
+                }
+                for e in events
+            ]
+
+    def verified_targets(self, verifier_id: str) -> list[str]:
+        """The work task(s) a gate or review checks."""
+        with self.tx() as s:
+            return [t.id for t in self._verified_targets(s, verifier_id)]
+
+    def feedback(self, task_id: str) -> dict[str, Any]:
+        """What the verifiers said last round, for a work task that was sent back."""
+        with self.tx() as s:
+            t = self._task(s, task_id)
+            last = t.revision_round - 1
+            if last < 0:
+                return {"reviews": [], "gates": []}
+            reviews = s.scalars(
+                select(Review).where(Review.target_task_id == t.id, Review.round == last)
+            )
+            gates = s.scalars(
+                select(GateResult).where(
+                    GateResult.target_task_id == t.id,
+                    GateResult.round == last,
+                    GateResult.passed.is_(False),
+                )
+            )
+            return {
+                "reviews": [
+                    {
+                        "reviewer": r.reviewer,
+                        "verdict": r.verdict,
+                        "summary": r.summary,
+                        "findings": [f.model_dump(exclude_none=True) for f in r.findings],
+                    }
+                    for r in reviews
+                ],
+                "gates": [{"gate": g.gate, "output": g.output[-4000:]} for g in gates],
+            }
+
+    def human_answers(self, task_id: str) -> list[dict[str, str]]:
+        """Questions this task asked and what the person answered, oldest first."""
+        with self.tx() as s:
+            rows = s.scalars(
+                select(HumanRequest)
+                .where(HumanRequest.task_id == task_id, HumanRequest.status == "answered")
+                .order_by(HumanRequest.created_at)
+            )
+            return [{"question": r.prompt, "answer": r.response or ""} for r in rows]
+
+    def log_event(
+        self, task_id: str, type: str, payload: dict[str, Any], *, actor: str = SYSTEM
+    ) -> None:
+        """A runtime event about a task (merge, worktree, gate output) on the same chain."""
+        with self.tx() as s:
+            self._event(s, self._task(s, task_id), type, payload, actor=actor)
+
+    def log_project_event(
+        self, project_id: str, type: str, payload: dict[str, Any], *, actor: str = HUMAN
+    ) -> None:
+        """An event about the project itself (files a person added to its repo)."""
+        with self.tx() as s:
+            p = self._project(s, project_id)
+            self.events.append(s, project_id=p.id, type=type, actor=actor, payload=payload)
+
+    def evidence(self, root_id: str) -> dict[str, Any]:
+        """Everything an auditor needs for one objective: plans, tasks, verdicts, decisions."""
+        with self.tx() as s:
+            root = self._task(s, root_id)
+            tasks = s.scalars(
+                select(Task).where(Task.root_id == root.id).order_by(Task.depth, Task.created_at)
+            ).all()
+            ids = [t.id for t in tasks]
+            plans = s.scalars(
+                select(PlanRecord)
+                .where(PlanRecord.root_task_id == root.id)
+                .order_by(PlanRecord.version)
+            )
+            reviews = s.scalars(
+                select(Review).where(Review.target_task_id.in_(ids)).order_by(Review.round)
+            )
+            gates = s.scalars(
+                select(GateResult)
+                .where(GateResult.target_task_id.in_(ids))
+                .order_by(GateResult.round, GateResult.gate)
+            )
+            humans = s.scalars(
+                select(HumanRequest)
+                .where(HumanRequest.task_id.in_(ids))
+                .order_by(HumanRequest.created_at)
+            )
+            runs = s.scalars(select(Run).where(Run.task_id.in_(ids)))
+            artifacts = s.scalars(
+                select(Artifact).where(Artifact.task_id.in_(ids)).order_by(Artifact.created_at)
+            )
+            node = {t.id: t.plan_node_id or "objective" for t in tasks}
+            return {
+                "project_id": root.project_id,
+                "root": self._snapshot(s, root),
+                "objective": root.objective,
+                "criteria": root.acceptance_criteria or {},
+                "plans": [
+                    {
+                        "version": p.version,
+                        "valid": p.valid,
+                        "errors": [str(e) for e in p.errors],
+                        "spec": p.spec.model_dump(mode="json") if p.valid else None,
+                    }
+                    for p in plans
+                ],
+                "tasks": [self._snapshot(s, t) for t in tasks],
+                "reviews": [
+                    {
+                        "target": node[r.target_task_id],
+                        "reviewer": r.reviewer,
+                        "round": r.round,
+                        "verdict": r.verdict,
+                        "summary": r.summary,
+                        "findings": [f.model_dump(exclude_none=True) for f in r.findings],
+                    }
+                    for r in reviews
+                ],
+                "gates": [
+                    {
+                        "target": node[g.target_task_id],
+                        "round": g.round,
+                        "gate": g.gate,
+                        "passed": g.passed,
+                    }
+                    for g in gates
+                ],
+                "decisions": [
+                    {
+                        "task": node[h.task_id],
+                        "kind": h.kind,
+                        "prompt": h.prompt,
+                        "status": h.status,
+                        "response": h.response,
+                    }
+                    for h in humans
+                ],
+                "artifacts": [
+                    {
+                        "task": node[a.task_id] if a.task_id else "-",
+                        "name": a.name,
+                        "kind": a.kind,
+                        "sha256": a.sha256,
+                        "path": a.path,
+                    }
+                    for a in artifacts
+                ],
+                "cost_usd": round(sum(r.cost_usd for r in runs), 6),
+            }
+
     def verify_events(self, project_id: str) -> VerifyResult:
         """Re-hash this project's event chain; reports the first tampered event, if any."""
         with self.tx() as s:
@@ -803,6 +1175,8 @@ class TaskOrchestrator:
         ]
         return {
             "id": t.id,
+            "project_id": t.project_id,
+            "root_id": t.root_id,
             "node": t.plan_node_id,
             "kind": t.kind,
             "title": t.title,
@@ -810,6 +1184,7 @@ class TaskOrchestrator:
             "outcome": t.outcome,
             "assignee": t.assignee,
             "paths": t.paths,
+            "gates": t.gates,
             "parent_id": t.parent_id,
             "attempt": t.attempt,
             "revision_round": t.revision_round,
@@ -886,6 +1261,10 @@ class TaskOrchestrator:
             for _, child in self._downstream(s, t.id):
                 if child.status not in TERMINAL_STATUSES:
                     self._cancel(s, child, f"upstream task {t.id} is {to}")
+            # An objective or plan task that ends takes the tasks under it along.
+            for sub in s.scalars(select(Task).where(Task.parent_id == t.id)):
+                if sub.status not in TERMINAL_STATUSES:
+                    self._cancel(s, sub, f"parent task {t.id} is {to}")
         # 3. The last planned task to finish closes the plan task.
         if to in TERMINAL_STATUSES and t.parent_id:
             self._settle_plan(s, t.parent_id)
@@ -928,6 +1307,7 @@ class TaskOrchestrator:
             self._transition(s, target, S.DONE, "all verifiers passed", round=target.revision_round)
         elif target.revision_round < self._project(s, target.project_id).limits.max_revision_rounds:
             target.revision_round += 1
+            target.attempt = 0  # each round gets every attempt; the round limit bounds rework
             self._transition(
                 s,
                 target,
@@ -937,7 +1317,7 @@ class TaskOrchestrator:
                 failed_verifiers=[v.id for v in failed],
             )
             for v in verifiers:
-                v.outcome = None
+                v.outcome, v.attempt = None, 0
                 self._transition(s, v, S.PENDING, f"re-verify {target.id} after revision")
         else:
             self._open_human(

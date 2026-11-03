@@ -1,13 +1,15 @@
 """Spike: can muse-spark plan through orchestrator tools reliably, and what does a run cost?
 
 Runs the PM agent N times per scenario, each trial on a fresh SQLite DB, and records
-outcome, tool calls, retries and cost. No MCP: tools call the orchestrator in-process.
+outcome, tool calls, retries and cost. Tools call the orchestrator in-process, or with
+--mcp through the agent MCP server (same tools, same schemas, run-token identity).
 
     uv run python -m orch.runtime.spike --n 5                    # live, needs MODEL_API_KEY
     uv run python -m orch.runtime.spike --model muse-spark-1.3   # standard (no training)
     uv run python -m orch.runtime.spike --n 5 --effort low       # cheaper reasoning
     uv run python -m orch.runtime.spike --no-validate            # submit_plan only (item #8)
     uv run python -m orch.runtime.spike --offline                # scripted model, no network
+    uv run python -m orch.runtime.spike --offline --mcp          # same, over the MCP server
 
 Results go to <data dir>/spike/<timestamp>/: results.jsonl, summary.md, and per trial a
 transcript (<scenario>-<i>.json) and its database (<scenario>-<i>.db). See orch.paths.
@@ -28,7 +30,8 @@ from typing import Any, Literal, cast
 
 import typer
 import yaml
-from pydantic_ai import Agent, capture_run_messages
+from pydantic_ai import Agent, RunContext, capture_run_messages
+from pydantic_ai.mcp import CallToolFunc, MCPToolset
 from pydantic_ai.messages import (
     ModelMessage,
     ModelMessagesTypeAdapter,
@@ -42,6 +45,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.models import Model
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.openai import OpenAIChatModelSettings
+from pydantic_ai.toolsets import AbstractToolset
 from pydantic_ai.usage import RunUsage, UsageLimits
 
 from orch.core.orchestrator import TaskOrchestrator
@@ -49,9 +53,10 @@ from orch.core.team import TeamRegistry
 from orch.db.session import open_db
 from orch.domain.enums import TaskStatus
 from orch.domain.schemas import AgentConfig, Plan
+from orch.mcp.server import CALL_ID_META, serve
 from orch.paths import data_dir
 from orch.runtime.model import DEFAULT_MODEL, PRICES, Api, cost_usd, meta_model
-from orch.runtime.pm_tools import PMDeps, pm_tools
+from orch.runtime.pm_tools import SPIKE_TOOLS, PMDeps, pm_tools
 
 ROOT = Path(__file__).resolve().parents[3]
 Outcome = Literal["accepted", "escalated", "no_plan", "timeout", "error"]
@@ -170,12 +175,40 @@ def task_prompt(objective: str, criteria: dict[str, str]) -> str:
     )
 
 
-def build_agent(pm: AgentConfig, *, with_validate: bool) -> Agent[PMDeps, str]:
+async def _with_call_id(
+    ctx: RunContext[PMDeps], call: CallToolFunc, name: str, args: dict[str, Any]
+) -> Any:
+    """Send the model's tool-call id, so a retried request can't act twice."""
+    return await call(name, args, metadata={CALL_ID_META: ctx.tool_call_id})
+
+
+def mcp_toolset(url: str, *, with_validate: bool) -> AbstractToolset[PMDeps]:
+    """The PM's tools over MCP, cut down to the spike's set so both modes compare."""
+    names = set(SPIKE_TOOLS if with_validate else ["list_agents", "submit_plan"])
+    ts: MCPToolset[PMDeps] = MCPToolset(
+        url,
+        auth=lambda ctx: ctx.deps.run_token,
+        process_tool_call=_with_call_id,
+        include_return_schema=False,
+    )
+    return ts.filtered(lambda ctx, tool: tool.name in names)
+
+
+def build_agent(
+    pm: AgentConfig, *, with_validate: bool, mcp_url: str | None = None
+) -> Agent[PMDeps, str]:
     instructions = pm.prompt
     if not with_validate:
         instructions += (
             "\nvalidate_plan is not available in this session: submit_plan validates the "
             "plan and returns the same errors."
+        )
+    if mcp_url:
+        return Agent(
+            deps_type=PMDeps,
+            instructions=instructions,
+            toolsets=[mcp_toolset(mcp_url, with_validate=with_validate)],
+            retries=3,
         )
     return Agent(
         deps_type=PMDeps,
@@ -186,11 +219,14 @@ def build_agent(pm: AgentConfig, *, with_validate: bool) -> Agent[PMDeps, str]:
 
 
 async def run_trial(
-    scn: Scenario, i: int, *, model: Model, workdir: Path, **kw: Any
+    scn: Scenario, i: int, *, model: Model, workdir: Path, use_mcp: bool = False, **kw: Any
 ) -> TrialResult:
     """One PM run on a fresh database, both kept in workdir."""
     orch = TaskOrchestrator(open_db(workdir / f"{scn.name}-{i}.db"))
-    return await _trial(orch, scn, i, model=model, workdir=workdir, **kw)
+    if not use_mcp:
+        return await _trial(orch, scn, i, model=model, workdir=workdir, **kw)
+    async with serve(orch) as url:
+        return await _trial(orch, scn, i, model=model, workdir=workdir, mcp_url=url, **kw)
 
 
 async def _trial(
@@ -204,6 +240,7 @@ async def _trial(
     settings: OpenAIChatModelSettings,
     timeout_s: float,
     price_as: str,
+    mcp_url: str | None = None,
 ) -> TrialResult:
     team = make_team(scn.with_security)
     pid = orch.create_project(f"spike-{scn.name}-{i}")
@@ -211,8 +248,8 @@ async def _trial(
     root = orch.create_root_task(pid, scn.objective, acceptance_criteria=scn.criteria)
     claim = orch.claim(root)
     assert claim is not None
-    deps = PMDeps(orch, pid, root, claim.run_id)
-    agent = build_agent(team.get(team.pm), with_validate=with_validate)
+    deps = PMDeps(orch, pid, root, claim.run_id, claim.run_token)
+    agent = build_agent(team.get(team.pm), with_validate=with_validate, mcp_url=mcp_url)
 
     usage = RunUsage()
     limits = UsageLimits(request_limit=20)
@@ -430,6 +467,7 @@ def main(
     concurrency: int = typer.Option(3),
     timeout: float = typer.Option(300, help="seconds per trial"),
     offline: bool = typer.Option(False, help="scripted model, no network"),
+    mcp: bool = typer.Option(False, help="reach the tools through the agent MCP server"),
 ) -> None:
     if model_name not in PRICES:
         raise typer.BadParameter(f"no price for {model_name}; add it to model.PRICES")
@@ -453,6 +491,7 @@ def main(
             settings=settings,
             timeout_s=timeout,
             price_as=model_name,
+            use_mcp=mcp,
         )
     )
     with (out / "results.jsonl").open("w") as f:
@@ -460,7 +499,7 @@ def main(
             f.write(json.dumps(asdict(r)) + "\n")
     config = (
         f"model={'scripted' if offline else model_name} api={api} effort={effort or 'default'} "
-        f"validate={validate} n={n}"
+        f"validate={validate} mcp={mcp} n={n}"
     )
     summary = f"# PM spike {out.name}\n\n{config}\n\n{summarize(results)}\n"
     (out / "summary.md").write_text(summary)

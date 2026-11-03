@@ -85,6 +85,7 @@ def test_full_lifecycle_with_one_revision(orch, team, good_plan):
     orch.record_review(ids["review_transfer"], CHANGES)
     assert st(orch, impl) == S.READY
     assert orch.get_task(impl)["revision_round"] == 1
+    assert orch.get_task(impl)["attempt"] == 0  # the revision gets every attempt again
     assert st(orch, ids["gates"]) == S.PENDING and st(orch, ids["review_transfer"]) == S.PENDING
 
     # round 1: both pass
@@ -291,3 +292,34 @@ def test_planned_tasks_keep_their_paths(orch, team, good_plan):
     _, _, ids = planned(orch, team, good_plan)
     assert orch.get_task(ids["implement_transfer"])["paths"] == ["minibank/api/transfers.py"]
     assert orch.get_task(ids["gates"])["paths"] == []
+
+
+def test_review_may_block_on_an_engineering_standard(orch, team, good_plan):
+    _, _, ids = planned(orch, team, good_plan)
+    start(orch, ids["write_tests"])
+    orch.complete(ids["write_tests"], "ok")
+    start(orch, ids["implement_transfer"])
+    orch.complete(ids["implement_transfer"], "ok")
+    start(orch, ids["review_transfer"])
+    alias = Finding(
+        severity="major", issue="pct_diff only renames pct_difference", criterion_id="STD-001"
+    )
+    verdict = ReviewVerdict(verdict="request_changes", findings=[alias])
+    assert orch.record_review(ids["review_transfer"], verdict) == S.DONE
+    root = orch.get_task(ids["review_transfer"])["root_id"]
+    (review,) = orch.evidence(root)["reviews"]
+    assert review["verdict"] == "request_changes"
+    assert review["findings"][0]["criterion_id"] == "STD-001"
+
+
+def test_canceling_an_objective_cancels_its_tasks(orch, team, good_plan):
+    pid, root, ids = planned(orch, team, good_plan)
+    start(orch, ids["write_tests"])
+    orch.complete(ids["write_tests"], "4 tests")
+    start(orch, ids["implement_transfer"])
+    assert orch.complete(ids["implement_transfer"], "done") == S.VERIFYING
+
+    assert orch.cancel(root, "stuck") == S.CANCELED
+    assert st(orch, ids["write_tests"]) == S.DONE  # finished work stays finished
+    for node in ("implement_transfer", "gates", "review_transfer", "approve"):
+        assert st(orch, ids[node]) == S.CANCELED, node

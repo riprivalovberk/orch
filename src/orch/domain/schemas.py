@@ -133,6 +133,9 @@ class PlanNode(BaseModel):
     # test/implement nodes: repo files or globs this node will write. Checked against the
     # assignee's write_paths at plan time; write_file only allows paths matching both.
     paths: list[str] = Field(default_factory=list)
+    # implement nodes: the code serves callers over the network (an HTTP route, a function
+    # trigger, a webhook), so it needs a security review (SEC-001).
+    exposes_network: bool = False
 
     @field_validator("paths")
     @classmethod

@@ -1,10 +1,12 @@
 """Each project's tests run with the project's own dependencies.
 
 A project that declares dependencies (requirements.txt, or [project].dependencies in
-pyproject.toml) gets a virtualenv named after it (.orch/envs/positions-rec-10) with exactly
-those plus pytest, built with uv and rebuilt whenever the list changes. Code that imports a
-package it did not declare fails its tests, as it would on deploy, and nothing has to stand
-in for a package the project needs. A project that declares nothing runs on orch's Python.
+pyproject.toml) gets one virtualenv, named after it (.orch/envs/positions-rec-10), holding
+exactly those plus pytest. When the list changes, uv syncs the packages in place: the
+environment is never deleted, so tests running on it keep their interpreter. Code that
+imports a package it did not declare fails its tests, as it would on deploy, and nothing
+has to stand in for a package the project needs. A project that declares nothing runs on
+orch's Python.
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -24,8 +27,20 @@ SHARED = "ORCH_SHARED_PYTHON"  # "1": always use orch's Python (orch's own tests
 INSTALL_TIMEOUT_S = 600
 
 
+# uv's words when the package index cannot be reached, as opposed to a package that is not on it.
+UNREACHABLE = re.compile(
+    r"(?i)error sending request|dns error|failed to lookup address|name resolution|"
+    r"connection (refused|reset|closed)|network is unreachable|operation timed out|"
+    r"tls handshake|certificate"
+)
+
+
 class EnvError(RuntimeError):
-    """The project's dependencies could not be installed."""
+    """The project's dependencies could not be installed: fix what it declares."""
+
+
+class IndexUnreachable(EnvError):
+    """The package index could not be reached; nothing the project declares is wrong."""
 
 
 def declared(repo: Path) -> list[str]:
@@ -56,14 +71,15 @@ def python_for(repo: Path) -> str:
     want = "\n".join([sys.version, *spec]) + "\n"
     env = data_dir() / "envs" / project_name(repo)
     python = env / "bin" / "python"
-    built = env / "spec.txt"  # written last: what the environment holds once it is whole
+    built = env / "spec.txt"  # written last: what the environment holds once it is synced
     if _reads(built) == want:
         return str(python)
     env.parent.mkdir(parents=True, exist_ok=True)
-    # Tasks verified in parallel may ask for the same environment: build it once.
+    # Tasks verified in parallel may ask for the same environment: sync it once.
     with (env.parent / f"{env.name}.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if _reads(built) != want:
+            built.unlink(missing_ok=True)  # not ready until the sync below finishes
             _build(uv, env, spec)
             built.write_text(want)
     return str(python)
@@ -86,18 +102,27 @@ def _reads(path: Path) -> str | None:
 
 
 def _build(uv: str, env: Path, spec: list[str]) -> None:
-    shutil.rmtree(env, ignore_errors=True)  # an old package list, or a build that failed
-    steps = [
-        [uv, "venv", "--quiet", "--python", sys.executable, str(env)],
-        [uv, "pip", "install", "--quiet", "--python", str(env / "bin" / "python"), *spec],
-    ]
-    for cmd in steps:
-        try:
-            p = subprocess.run(cmd, capture_output=True, text=True, timeout=INSTALL_TIMEOUT_S)
-        except subprocess.TimeoutExpired as e:
-            raise EnvError(f"installing {', '.join(spec)} timed out") from e
-        if p.returncode != 0:
-            shutil.rmtree(env, ignore_errors=True)
-            raise EnvError(
-                f"could not install {', '.join(spec)}:\n{(p.stderr or p.stdout)[-3000:]}"
-            )
+    """Create the environment if it is missing, then make its packages exactly spec."""
+    python = env / "bin" / "python"
+    if not python.exists():
+        _uv([uv, "venv", "--quiet", "--python", sys.executable, str(env)], spec)
+    wanted, locked = env / "requirements.in", env / "requirements.lock"
+    wanted.write_text("\n".join(spec) + "\n")
+    # compile resolves the dependencies; sync installs those and removes everything else.
+    _uv(
+        [uv, "pip", "compile", "--quiet", "--python", str(python), str(wanted), "-o", str(locked)],
+        spec,
+    )
+    _uv([uv, "pip", "sync", "--quiet", "--python", str(python), str(locked)], spec)
+
+
+def _uv(cmd: list[str], spec: list[str]) -> None:
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=INSTALL_TIMEOUT_S)
+    except subprocess.TimeoutExpired as e:
+        raise IndexUnreachable(f"installing {', '.join(spec)} timed out") from e
+    if p.returncode != 0:
+        detail = (p.stderr or p.stdout)[-3000:]
+        if UNREACHABLE.search(detail):
+            raise IndexUnreachable(f"could not reach the package index:\n{detail}")
+        raise EnvError(f"could not install {', '.join(spec)}:\n{detail}")

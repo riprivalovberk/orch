@@ -61,8 +61,8 @@ Every call goes through one wrapper:
 | `request_human_input` | PM (any later) | `request_human`; task pauses |
 | `get_task` *(new, all)* | all | my task: kind, criteria, `paths`, prior review findings |
 | `read_file`, `list_files`, `search_code` | workers, reviewers | read-only in the worktree |
-| `write_file` | test_developer, developers | `task_can_write(agent paths, task paths)` |
-| `run_tests` | test_developer, developers | pytest in worktree, timeout, output tail |
+| `write_file` | developers | `task_can_write(agent paths, task paths)` |
+| `run_tests` | developers | pytest in worktree, timeout, output tail |
 | `submit_artifact` | workers | text, or a copy of a repo file, stored by sha256 under `.orch/artifacts/` → `Artifact` row; listed in the evidence; never changes the repo |
 | `complete_task` | workers | `orch.complete` (→ VERIFYING or DONE) |
 | `submit_review` | code_reviewer, security_reviewer | `orch.record_review` with the diff of the target |

@@ -20,6 +20,7 @@ from orch.core.team import TeamRegistry
 from orch.domain.enums import TaskStatus
 from orch.domain.schemas import Plan
 from orch.mcp.server import AgentMCP
+from orch.policies.fintech_sdlc import PROTECTED_DIRS
 from orch.runtime import gates, scripted
 from orch.runtime.runner import Runner
 from orch.runtime.workspace import Workspace
@@ -137,11 +138,15 @@ def worker(orch: TaskOrchestrator, team: TeamRegistry, ws: Workspace, good_plan:
     return srv, run(srv.caller(c.run_token)), tasks
 
 
+# A test file naming a test for each criterion the good plan's test node covers.
+COVERED = "\n\n".join(f"def test_ac{i}_holds():\n    pass\n" for i in range(1, 5))
+
+
 def test_write_file_is_held_to_the_task_scope(
     orch: TaskOrchestrator, team: TeamRegistry, ws: Workspace, good_plan: Plan
 ):
     srv, c, _ = worker(orch, team, ws, good_plan)
-    ok = run(srv.call(c, "write_file", {"path": "tests/test_transfers.py", "content": "x = 1\n"}))
+    ok = run(srv.call(c, "write_file", {"path": "tests/test_transfers.py", "content": COVERED}))
     assert not ok.is_error
     wrong = run(srv.call(c, "write_file", {"path": "tests/test_other.py", "content": ""}))
     assert wrong.is_error and "outside this task's scope" in wrong.content[0].text  # type: ignore[union-attr]
@@ -312,13 +317,13 @@ def test_complete_task_formats_and_sorts_imports_itself(
     orch: TaskOrchestrator, team: TeamRegistry, ws: Workspace, good_plan: Plan
 ):
     srv, c, _ = worker(orch, team, ws, good_plan)
-    messy = "import sys\nimport os\nPATHS=[os.sep,sys.argv[0]]\n"
+    messy = "import sys\nimport os\nPATHS=[os.sep,sys.argv[0]]\n\n\n" + COVERED
     run(srv.call(c, "write_file", {"path": "tests/test_transfers.py", "content": messy}))
     r = run(srv.call(c, "complete_task", {"summary": "tests"}))
     assert not r.is_error, r.content[0].text  # type: ignore[union-attr]
     assert "tests/test_transfers.py" in r.content[0].text  # type: ignore[union-attr]
     tidy = (ws.task_dir(c.task_id) / "tests/test_transfers.py").read_text()
-    assert tidy == "import os\nimport sys\n\nPATHS = [os.sep, sys.argv[0]]\n"
+    assert tidy == "import os\nimport sys\n\nPATHS = [os.sep, sys.argv[0]]\n\n\n" + COVERED
     assert orch.get_task(c.task_id)["status"] != TaskStatus.RUNNING
 
 
@@ -328,11 +333,11 @@ def test_complete_task_removes_files_outside_the_task_paths(
     # positions-rec-6: code run at test time copied deploy files to the repo root
     srv, c, _ = worker(orch, team, ws, good_plan)
     d = ws.task_dir(c.task_id)
-    run(srv.call(c, "write_file", {"path": "tests/test_transfers.py", "content": "X = 1\n"}))
+    run(srv.call(c, "write_file", {"path": "tests/test_transfers.py", "content": COVERED}))
     readme = (d / "README.md").read_text()
     (d / "host.json").write_text("{}\n")
     (d / "README.md").write_text("changed\n")
-    ws.commit(c.task_id, "earlier round", author="test_developer")
+    ws.commit(c.task_id, "earlier round", author="developer")
     r = run(srv.call(c, "complete_task", {"summary": "tests"}))
     text = r.content[0].text  # type: ignore[union-attr]
     assert r.is_error and "README.md, host.json are outside" in text
@@ -342,12 +347,36 @@ def test_complete_task_removes_files_outside_the_task_paths(
     assert not done.is_error and ws.changed_files(c.task_id) == ["tests/test_transfers.py"]
 
 
+def test_complete_task_wants_a_test_named_for_each_covered_criterion(
+    orch: TaskOrchestrator, team: TeamRegistry, ws: Workspace, good_plan: Plan
+):
+    srv, c, _ = worker(orch, team, ws, good_plan)
+    three = COVERED.replace("test_ac4_holds", "test_amounts_hold")
+    run(srv.call(c, "write_file", {"path": "tests/test_transfers.py", "content": three}))
+    r = run(srv.call(c, "complete_task", {"summary": "tests"}))
+    assert r.is_error and "covers AC-4, but no test is named" in r.content[0].text  # type: ignore[union-attr]
+    run(srv.call(c, "write_file", {"path": "tests/test_transfers.py", "content": COVERED}))
+    assert not run(srv.call(c, "complete_task", {"summary": "tests"})).is_error
+
+
+def test_policy_gate_fails_network_code_without_a_security_review(tmp_path: Path):
+    (tmp_path / "app.py").write_text("import azure.functions as func\n\napp = func.FunctionApp()\n")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests/test_app.py").write_text("@client.get('/x')\ndef test_x(): ...\n")
+    changed, scope = ["app.py", "tests/test_app.py"], {"agent_paths": ["**", "tests/**"]}
+    args = {**scope, "task_paths": ["**", "tests/**"], "protected": PROTECTED_DIRS}
+    ok, out, _ = gates.policy(tmp_path, changed, **args)
+    assert not ok and "app.py:3: serves the network (FunctionApp(" in out
+    assert "tests/test_app.py" not in out  # tests may call routes
+    assert gates.policy(tmp_path, changed, **args, security_reviewed=True)[0]
+
+
 def test_revision_without_changes_is_refused(
     orch: TaskOrchestrator, team: TeamRegistry, ws: Workspace, good_plan: Plan, monkeypatch
 ):
     srv, c, _ = worker(orch, team, ws, good_plan)
-    run(srv.call(c, "write_file", {"path": "tests/test_transfers.py", "content": "X = 1\n"}))
-    ws.commit(c.task_id, "round 0", author="test_developer")
+    run(srv.call(c, "write_file", {"path": "tests/test_transfers.py", "content": COVERED}))
+    ws.commit(c.task_id, "round 0", author="developer")
     real = orch.get_task
     monkeypatch.setattr(orch, "get_task", lambda tid: {**real(tid), "revision_round": 1})
     r = run(srv.call(c, "complete_task", {"summary": "no changes"}))

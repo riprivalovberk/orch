@@ -2,7 +2,7 @@
 
 SOD  segregation of duties     GATE  deterministic checks     COV  test coverage
 APR  human approval            PAY   payments code needs a security review
-SEC  code reachable over the network (HTTP endpoints, triggers) needs a security review
+SEC  code the plan marks as serving the network (exposes_network) needs a security review
 SCOPE  every test/implement node says what it writes, and its assignee may write it
 IFACE  a plan that builds code fixes its interface first, so tests and code agree
 
@@ -11,7 +11,6 @@ STANDARDS are the engineering rules reviewers may block on, besides the acceptan
 
 from __future__ import annotations
 
-import re
 from collections.abc import Iterable
 
 from orch.core.plan import PlanGraph, Rule, ValidationContext, err
@@ -21,17 +20,14 @@ from orch.domain.schemas import PlanError, PlanNode
 
 REQUIRED_GATES = frozenset({GateName.PYTEST, GateName.RUFF, GateName.POLICY})
 SENSITIVE_DIRS = frozenset({"payments"})
-# Directories only a pattern naming them can write: payments code, and tests, so the agent
-# whose code the tests judge never edits them, however broad its scope.
-PROTECTED_DIRS = SENSITIVE_DIRS | {"tests"}
+# Directories only a pattern naming them can write, however broad an agent's scope: payments
+# code, and the tests. Implement nodes never list tests/ (SCOPE-001), so code is never
+# written by a task that can also change the tests that judge it.
+TESTS_DIR = "tests"
+PROTECTED_DIRS = SENSITIVE_DIRS | {TESTS_DIR}
 BUILD_KINDS = frozenset({TaskKind.IMPLEMENT, TaskKind.TEST, *REVIEW_KINDS})
 WRITING_KINDS = (TaskKind.TEST, TaskKind.IMPLEMENT)
 MIN_INTERFACE_CHARS = 40
-# Criteria that put code behind a network endpoint: callers outside the team reach it.
-NETWORK_EXPOSURE = re.compile(
-    r"\b(https?|endpoint|route|api/|trigger|webhook|request param\w*|query param\w*)\b",
-    re.IGNORECASE,
-)
 
 STANDARDS: dict[str, str] = {
     "STD-001": "One name per behavior: no aliases, wrappers that only rename, or duplicate "
@@ -213,6 +209,15 @@ def scope_001_paths(g: PlanGraph, ctx: ValidationContext) -> Iterable[PlanError]
                 f"write_paths {list(card.write_paths)}",
             )
         for path in n.paths:
+            if n.kind == TaskKind.IMPLEMENT and touches([path], frozenset({TESTS_DIR})):
+                yield err(
+                    "SCOPE-001",
+                    n.id,
+                    f"{n.id} writes code and lists {path}; the tests that judge code are "
+                    "written in test nodes only",
+                    f"remove {path} from {n.id} and put it on a test node",
+                )
+                continue
             if can_write(card.write_paths, path, PROTECTED_DIRS):
                 continue
             able = [
@@ -250,14 +255,19 @@ def pay_001_security_review(g: PlanGraph, ctx: ValidationContext) -> Iterable[Pl
 
 
 def sec_001_network_exposure(g: PlanGraph, ctx: ValidationContext) -> Iterable[PlanError]:
-    """Code that criteria put behind a network endpoint needs a security review."""
-    exposed = sorted(
-        ac for ac, text in g.plan.acceptance_criteria.items() if NETWORK_EXPOSURE.search(text)
-    )
-    if not exposed:
-        return
-    for n in g.of_kind(TaskKind.IMPLEMENT):
-        what = f"{n.id} builds code that {exposed[0]} exposes over the network"
+    """Implement nodes marked exposes_network need a security review.
+
+    The PM marks the node that builds an HTTP route, function trigger or webhook. Code that
+    serves the network without the mark fails the policy gate, so leaving it off does not
+    skip the review.
+    """
+    for n in g.nodes.values():
+        if not n.exposes_network:
+            continue
+        if n.kind != TaskKind.IMPLEMENT:
+            yield err("SEC-001", n.id, "only implement nodes take exposes_network")
+            continue
+        what = f"{n.id} serves callers over the network"
         yield from _needs_security_review("SEC-001", n, what, g, ctx)
 
 
@@ -287,7 +297,15 @@ def _needs_security_review(
 
 
 def iface_001_interface_first(g: PlanGraph, ctx: ValidationContext) -> Iterable[PlanError]:
-    """A plan with implement work states the interface, so tests and code are written to it."""
+    """A plan that builds code states the code's interface before anyone writes it.
+
+    The test developer writes the tests first, against code that does not exist yet, and the
+    developer writes the code afterwards in another worktree. The plan's interface is the
+    contract between them: module paths, classes and public functions with exact names,
+    arguments, return types and result fields. Both get it in their brief, and the reviewer
+    blocks tests that guess between names (STD-005). Only its presence is checked here (a
+    few words at least); whether it is complete shows when the tests import it.
+    """
     if g.of_kind(TaskKind.IMPLEMENT) and len(g.plan.interface.strip()) < MIN_INTERFACE_CHARS:
         yield err(
             "IFACE-001",

@@ -179,12 +179,13 @@ def test_payments_with_specialist_needs_node_then_clears(good_plan, team_with_se
     assert check(fixed, team_with_security) == []
 
 
-def test_http_criterion_needs_security_review_then_clears(good_plan, team_with_security):
+def test_network_node_needs_security_review_then_clears(good_plan, team_with_security):
     p = good_plan.model_copy(deep=True)
-    p.acceptance_criteria["AC-1"] = "GET /api/breaks returns HTTP 200 with JSON"
+    p.acceptance_criteria["AC-1"] = "a quantity mismatch triggers a break"  # no endpoint
+    assert check(p, team_with_security) == []
+    next(n for n in p.nodes if n.id == "implement_transfer").exposes_network = True
     errors = check(p, team_with_security)
-    assert codes(errors) == ["SEC-001"] and "AC-1" in errors[0].message
-    assert "security_reviewer" in errors[0].hint
+    assert codes(errors) == ["SEC-001"] and "security_reviewer" in errors[0].hint
 
     fixed = edit(
         p,
@@ -196,11 +197,17 @@ def test_http_criterion_needs_security_review_then_clears(good_plan, team_with_s
     assert check(fixed, team_with_security) == []
 
 
-def test_http_criterion_without_specialist_escalates(good_plan, team):
+def test_network_node_without_specialist_escalates(good_plan, team):
     p = good_plan.model_copy(deep=True)
-    p.acceptance_criteria["AC-1"] = "an HTTP trigger returns the breaks"
+    next(n for n in p.nodes if n.id == "implement_transfer").exposes_network = True
     errors = check(p, team)
     assert codes(errors) == ["SEC-001"] and errors[0].escalate
+
+
+def test_only_implement_nodes_expose_the_network(good_plan, team):
+    p = good_plan.model_copy(deep=True)
+    next(n for n in p.nodes if n.id == "write_tests").exposes_network = True
+    assert codes(check(p, team)) == ["SEC-001"]
 
 
 def test_payments_work_given_to_developer_is_scope_001(good_plan, team):
@@ -221,6 +228,13 @@ def test_writing_node_without_paths_is_scope_001(good_plan, team):
     next(n for n in p.nodes if n.id == "write_tests").paths = []
     errors = check(p, team)
     assert codes(errors) == ["SCOPE-001"] and "tests/**" in errors[0].hint
+
+
+def test_implement_node_cannot_list_tests(good_plan, team):
+    p = good_plan.model_copy(deep=True)
+    next(n for n in p.nodes if n.id == "implement_transfer").paths.append("tests/conftest.py")
+    errors = check(p, team)
+    assert codes(errors) == ["SCOPE-001"] and "test nodes only" in errors[0].message
 
 
 def test_only_writing_nodes_take_paths(good_plan, team):

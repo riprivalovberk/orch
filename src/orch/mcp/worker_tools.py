@@ -22,7 +22,7 @@ from orch.core.scope import is_safe_relative, task_can_write
 from orch.domain.enums import REVIEW_KINDS, TaskKind, Verdict
 from orch.domain.schemas import Check, Finding, ReviewVerdict
 from orch.policies.fintech_sdlc import PROTECTED_DIRS
-from orch.runtime import gates
+from orch.runtime import envs, gates
 from orch.runtime.workspace import Workspace
 
 if TYPE_CHECKING:
@@ -199,7 +199,14 @@ def run_tests(ctx: RunContext[WorkerDeps], target: str = "") -> dict[str, Any]:
     """
     if target and not is_safe_relative(target.split("::")[0]):
         raise ModelRetry("target must be a repo-relative test path")
-    ok, out, ms = gates.pytest(ctx.deps.root(), *([target] if target else []), timeout=180)
+    try:
+        ok, out, ms = gates.pytest(ctx.deps.root(), *([target] if target else []), timeout=180)
+    except envs.IndexUnreachable as e:
+        return {
+            "passed": False,
+            "output": f"{e}\nThe package index is unreachable right now; this is not a "
+            "problem with your code or requirements.txt. Try run_tests again shortly.",
+        }
     return {"passed": ok, "seconds": round(ms / 1000, 1), "output": out}
 
 
@@ -285,6 +292,12 @@ def complete_task(ctx: RunContext[WorkerDeps], summary: str) -> dict[str, Any]:
                     "ruff fails on your files; fix each spot with edit_file, then "
                     f"complete_task:\n{out}"
                 )
+        if c.kind == TaskKind.TEST and (untested := _untested(d.root(), py, c.task_id, d)):
+            raise ModelRetry(
+                f"the plan says this task covers {', '.join(untested)}, but no test is named "
+                f"for {'it' if len(untested) == 1 else 'them'}: add test_{_slug(untested[0])}_... "
+                "for each, then complete_task"
+            )
         sha = d.ws.commit(c.task_id, f"{c.agent}: {summary[:72]}\n\n{summary}", author=c.agent)
         rnd = d.orch.get_task(c.task_id)["revision_round"]
         if sha is None and rnd > 0:
@@ -299,6 +312,22 @@ def complete_task(ctx: RunContext[WorkerDeps], summary: str) -> dict[str, Any]:
         "formatted": tidied,
         "next": "Done. Reply with one line and make no more calls.",
     }
+
+
+def _slug(criterion: str) -> str:
+    """AC-3 -> ac3, the prefix of the tests that cover it."""
+    return re.sub(r"[^a-z0-9]", "", criterion.lower())
+
+
+def _untested(root: Path, py: list[str], task_id: str, d: WorkerDeps) -> list[str]:
+    """Criteria this test task covers that no test function in its files is named after."""
+    text = "\n".join((root / f).read_text(errors="replace") for f in py)
+    named = {m.lower() for m in re.findall(r"def (test_[A-Za-z0-9]+)", text)}
+    return [
+        ac
+        for ac in d.orch.planned_covers(task_id)
+        if not any(n == f"test_{_slug(ac)}" for n in named)
+    ]
 
 
 def submit_review(

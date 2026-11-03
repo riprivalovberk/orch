@@ -238,6 +238,8 @@ class Runner:
                     agent_paths=agent.write_paths if agent else [],
                     task_paths=target["paths"],
                     protected=PROTECTED_DIRS,
+                    security_reviewed=TaskKind.SECURITY_REVIEW
+                    in self.orch.verifier_kinds(target_id),
                 )
             )
         merged = combine(results)

@@ -980,6 +980,23 @@ class TaskOrchestrator:
                 for e in events
             ]
 
+    def verifier_kinds(self, task_id: str) -> set[TaskKind]:
+        """The kinds of verifier (gate, review, security_review) that check this task."""
+        with self.tx() as s:
+            return {TaskKind(t.kind) for t in self._verifiers(s, task_id)}
+
+    def planned_covers(self, task_id: str) -> list[str]:
+        """The criteria the accepted plan says this test task covers."""
+        with self.tx() as s:
+            t = self._task(s, task_id)
+            plan = s.scalars(
+                select(PlanRecord)
+                .where(PlanRecord.root_task_id == t.root_id, PlanRecord.valid.is_(True))
+                .order_by(PlanRecord.version.desc())
+            ).first()
+            node = plan and next((n for n in plan.spec.nodes if n.id == t.plan_node_id), None)
+            return list(node.covers) if node else []
+
     def verified_targets(self, verifier_id: str) -> list[str]:
         """The work task(s) a gate or review checks."""
         with self.tx() as s:

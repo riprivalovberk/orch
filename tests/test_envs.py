@@ -33,7 +33,7 @@ def test_nothing_declared_runs_on_orchs_python(tmp_path: Path, monkeypatch: pyte
     assert envs.python_for(repo(tmp_path)) == sys.executable
 
 
-def test_each_project_gets_its_own_env_rebuilt_when_its_packages_change(
+def test_each_project_gets_one_env_synced_when_its_packages_change(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.delenv(envs.SHARED)
@@ -48,7 +48,7 @@ def test_each_project_gets_its_own_env_rebuilt_when_its_packages_change(
     assert first == str(tmp_path / "data" / "envs" / "repo" / "bin" / "python")
     assert built == [["azure-functions", "pytest"]]  # once, with pytest added
     (r / "requirements.txt").write_text("azure-functions\npandas\n")
-    envs.python_for(r)
+    assert envs.python_for(r) == first  # the same environment, synced
     assert built[-1] == ["azure-functions", "pandas", "pytest"]
 
 
@@ -87,6 +87,43 @@ def test_a_bad_package_fails_the_pytest_gate_with_the_reason(
     monkeypatch.setattr(envs, "_build", fail)
     ok, out, _ = gates.pytest(repo(tmp_path, requirements="no-such-pkg\n"))
     assert not ok and "no-such-pkg" in out and "requirements.txt" in out
+
+
+def test_an_unreachable_index_is_not_blamed_on_the_requirements(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    def fake_uv(cmd, **kw):
+        err = "error: Request failed\n  Caused by: error sending request for url (https://pypi.org)"
+        if "venv" in cmd:
+            Path(cmd[-1]).mkdir(parents=True)
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        return subprocess.CompletedProcess(cmd, 2, "", err)
+
+    monkeypatch.delenv(envs.SHARED)
+    monkeypatch.setenv("ORCH_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(envs.subprocess, "run", fake_uv)
+    r = repo(tmp_path, requirements="pandas\n")
+    monkeypatch.setattr(envs, "project_name", lambda repo: "repo")
+    with pytest.raises(envs.IndexUnreachable):
+        gates.pytest(r)  # raised, so the runner retries the gate instead of failing the work
+
+
+def test_a_missing_package_is_blamed_on_the_requirements(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    def fake_uv(cmd, **kw):
+        err = "No solution found when resolving dependencies:\n  no-such-pkg was not found"
+        if "venv" in cmd:
+            Path(cmd[-1]).mkdir(parents=True)
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        return subprocess.CompletedProcess(cmd, 1, "", err)
+
+    monkeypatch.delenv(envs.SHARED)
+    monkeypatch.setenv("ORCH_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(envs.subprocess, "run", fake_uv)
+    monkeypatch.setattr(envs, "project_name", lambda repo: "repo")
+    ok, out, _ = gates.pytest(repo(tmp_path, requirements="no-such-pkg\n"))
+    assert not ok and "no-such-pkg was not found" in out and "requirements.txt" in out
 
 
 def test_tests_run_with_the_declared_packages(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

@@ -22,6 +22,11 @@ TIMEOUT_S = 300
 TAIL = 6000
 
 # Things that must never land in a bank's repo, whatever the task.
+# Code that serves callers over the network: a route, a function trigger, a web app.
+NETWORK_PATTERNS = re.compile(
+    r"@\w+\.(route|get|post|put|patch|delete|websocket)\(|\bFunctionApp\(|\bFastAPI\(|"
+    r"\bFlask\(|\bAPIRouter\(|\bHttpTrigger\b|\bhttp_trigger\b"
+)
 SECRET_PATTERNS = {
     "AWS access key": re.compile(r"AKIA[0-9A-Z]{16}"),
     "private key": re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
@@ -42,10 +47,16 @@ def _run(cmd: list[str], cwd: Path, *, timeout: float = TIMEOUT_S) -> tuple[int,
 
 
 def pytest(cwd: Path, *args: str, timeout: float = TIMEOUT_S) -> tuple[bool, str, int]:
-    """The project's tests, run with the packages it declares (see orch.runtime.envs)."""
+    """The project's tests, run with the packages it declares (see orch.runtime.envs).
+
+    Raises envs.IndexUnreachable when the packages cannot be downloaded: that is no fault of
+    the work, so the gate task is retried rather than failed.
+    """
     t0 = time.monotonic()
     try:
         python = envs.python_for(cwd)
+    except envs.IndexUnreachable:
+        raise
     except envs.EnvError as e:
         ms = int((time.monotonic() - t0) * 1000)
         return False, f"{e}\nFix the package names or versions in requirements.txt.", ms
@@ -90,8 +101,10 @@ def policy(
     agent_paths: Iterable[str],
     task_paths: Iterable[str],
     protected: frozenset[str],
+    security_reviewed: bool = False,
 ) -> tuple[bool, str, int]:
-    """Every changed file is inside the task's declared scope; no secrets in what changed."""
+    """Every changed file is inside the task's declared scope; no secrets in what changed;
+    code that serves the network only where the plan gave it a security review."""
     t0 = time.monotonic()
     agent_paths, task_paths = list(agent_paths), list(task_paths)
     problems: list[str] = []
@@ -107,6 +120,13 @@ def policy(
             if m := rx.search(text):
                 line = text.count("\n", 0, m.start()) + 1
                 problems.append(f"{f}:{line}: {what}")
+        serves = not security_reviewed and f.endswith(".py") and "tests" not in f.split("/")[:-1]
+        if serves and (m := NETWORK_PATTERNS.search(text)):
+            line = text.count("\n", 0, m.start()) + 1
+            problems.append(
+                f"{f}:{line}: serves the network ({m.group(0)}) but the plan gives this "
+                "task no security review; the plan must mark it exposes_network (SEC-001)"
+            )
     if not files:
         problems.append("the task changed no files")
     out = "\n".join(problems) or f"{len(files)} changed file(s) in scope, no secrets found"
@@ -121,6 +141,7 @@ def run_gates(
     agent_paths: Iterable[str],
     task_paths: Iterable[str],
     protected: frozenset[str],
+    security_reviewed: bool = False,
 ) -> list[GateResultIn]:
     changed = list(changed)
     results = []
@@ -136,6 +157,7 @@ def run_gates(
                 agent_paths=agent_paths,
                 task_paths=task_paths,
                 protected=protected,
+                security_reviewed=security_reviewed,
             )
         else:
             ok, out, ms = False, f"unknown gate {gate}", 0

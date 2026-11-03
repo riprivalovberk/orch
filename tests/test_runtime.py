@@ -278,6 +278,25 @@ def test_cli_offline_run_approve_resume_evidence(tmp_path: Path, monkeypatch):
     assert "hash chain **intact**" in md and "| implement_transfer | 0 | pytest | True |" in md
 
 
+def test_edit_file_replaces_one_exact_match_within_scope(
+    orch: TaskOrchestrator, team: TeamRegistry, ws: Workspace, good_plan: Plan
+):
+    srv, c, _ = worker(orch, team, ws, good_plan)
+    path = "tests/test_transfers.py"
+    run(srv.call(c, "write_file", {"path": path, "content": "A = 1\nB = 1\n"}))
+
+    def edit(old: str, new: str, file: str = path) -> Any:
+        return run(srv.call(c, "edit_file", {"path": file, "old_text": old, "new_text": new}))
+
+    assert not edit("A = 1\n", "A = 2\n").is_error
+    assert (ws.task_dir(c.task_id) / path).read_text() == "A = 2\nB = 1\n"
+    twice = edit(" = ", " == ")
+    assert twice.is_error and "occurs 2 times" in twice.content[0].text  # type: ignore[union-attr]
+    assert edit("C = 1", "").is_error  # not in the file
+    assert edit("x", "y", "minibank/api/transfers.py").is_error  # outside the task's paths
+    assert (ws.task_dir(c.task_id) / path).read_text() == "A = 2\nB = 1\n"
+
+
 def test_complete_task_refuses_lint_errors_and_empty_revisions(
     orch: TaskOrchestrator, team: TeamRegistry, ws: Workspace, good_plan: Plan
 ):

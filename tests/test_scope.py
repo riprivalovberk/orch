@@ -27,6 +27,31 @@ def test_can_write(scope, path, ok):
     assert can_write(scope, path, P) is ok
 
 
+TEAM = frozenset({"payments", "tests"})  # fintech_sdlc's PROTECTED_DIRS
+ANYWHERE = ["**"]  # the team's developer: wherever the plan sends it
+TESTER = ["tests/**"]
+PAYMENTS = ["payments/**", "*/payments/**"]
+
+
+@pytest.mark.parametrize(
+    ("scope", "path", "ok"),
+    [
+        (ANYWHERE, "host.json", True),  # deploy files at the root
+        (ANYWHERE, "positions_rec/reconcile.py", True),
+        (ANYWHERE, "tests/test_reconcile.py", False),  # never the tests that judge it
+        (ANYWHERE, "app/tests/test_x.py", False),
+        (ANYWHERE, "positions_rec/payments/charge.py", False),
+        (TESTER, "tests/test_reconcile.py", True),
+        (TESTER, "positions_rec/reconcile.py", False),
+        (PAYMENTS, "payments/charge.py", True),
+        (PAYMENTS, "positions_rec/payments/charge.py", True),
+        (PAYMENTS, "positions_rec/api.py", False),
+    ],
+)
+def test_broad_scope_stops_at_protected_dirs(scope, path, ok):
+    assert can_write(scope, path, TEAM) is ok
+
+
 def test_protected_grants():
     assert protected_grants(DEV, P) == set()
     assert protected_grants(PAY, P) == {"payments"}

@@ -35,7 +35,7 @@ from orch.domain.enums import (
 from orch.domain.schemas import GateResultIn
 from orch.mcp.server import CALL_ID_META, serve
 from orch.policies import get_standards
-from orch.policies.fintech_sdlc import SENSITIVE_DIRS
+from orch.policies.fintech_sdlc import PROTECTED_DIRS
 from orch.runtime import gates
 from orch.runtime.model import DEFAULT_MODEL, cost_usd
 from orch.runtime.workspace import Workspace
@@ -237,7 +237,7 @@ class Runner:
                     changed=self.ws.changed_files(target_id),
                     agent_paths=agent.write_paths if agent else [],
                     task_paths=target["paths"],
-                    protected=SENSITIVE_DIRS,
+                    protected=PROTECTED_DIRS,
                 )
             )
         merged = combine(results)
@@ -358,6 +358,20 @@ class Runner:
                 out.append(
                     "Other steps of the plan build the rest; their work is not part of this "
                     "task, so do not write it or ask for it here:\n" + "\n".join(others)
+                )
+        if kind in REVIEW_KINDS:
+            paths = sorted(
+                {
+                    p
+                    for t in self.orch.verified_targets(task["id"])
+                    for p in self.orch.get_task(t)["paths"]
+                }
+            )
+            if paths:
+                out.append(
+                    f"The work you review may write only {', '.join(paths)}. A change it needs "
+                    "outside those files is a GAP finding (severity minor) to disclose, never a "
+                    "blocker: the author cannot make it."
                 )
         if accepted and kind == TaskKind.TEST:
             code = [

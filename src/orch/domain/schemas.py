@@ -25,6 +25,7 @@ KNOWN_TOOLS = frozenset(
         "list_files",
         "search_code",
         "write_file",
+        "edit_file",
         "run_tests",
         "submit_artifact",
         "complete_task",
@@ -89,8 +90,9 @@ class AgentConfig(BaseModel):
 
     @model_validator(mode="after")
     def _writer_has_scope(self) -> AgentConfig:
-        if "write_file" in self.tools and not self.write_paths:
-            raise ValueError(f"{self.name} has write_file but no write_paths")
+        writes = {"write_file", "edit_file"} & set(self.tools)
+        if writes and not self.write_paths:
+            raise ValueError(f"{self.name} has {', '.join(sorted(writes))} but no write_paths")
         return self
 
 

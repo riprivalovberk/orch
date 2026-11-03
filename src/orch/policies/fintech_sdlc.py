@@ -19,6 +19,9 @@ from orch.domain.schemas import PlanError
 
 REQUIRED_GATES = frozenset({GateName.PYTEST, GateName.RUFF, GateName.POLICY})
 SENSITIVE_DIRS = frozenset({"payments"})
+# Directories only a pattern naming them can write: payments code, and tests, so the agent
+# whose code the tests judge never edits them, however broad its scope.
+PROTECTED_DIRS = SENSITIVE_DIRS | {"tests"}
 BUILD_KINDS = frozenset({TaskKind.IMPLEMENT, TaskKind.TEST, *REVIEW_KINDS})
 WRITING_KINDS = (TaskKind.TEST, TaskKind.IMPLEMENT)
 MIN_INTERFACE_CHARS = 40
@@ -203,14 +206,14 @@ def scope_001_paths(g: PlanGraph, ctx: ValidationContext) -> Iterable[PlanError]
                 f"write_paths {list(card.write_paths)}",
             )
         for path in n.paths:
-            if can_write(card.write_paths, path, SENSITIVE_DIRS):
+            if can_write(card.write_paths, path, PROTECTED_DIRS):
                 continue
             able = [
                 a
                 for a in ctx.agents_with(n.kind)
-                if can_write(ctx.agents[a].write_paths, path, SENSITIVE_DIRS)
+                if can_write(ctx.agents[a].write_paths, path, PROTECTED_DIRS)
             ]
-            protected = sorted(touches([path], SENSITIVE_DIRS))
+            protected = sorted(touches([path], PROTECTED_DIRS))
             why = (
                 f" ({protected[0]}/ is only writable by agents whose scope names it)"
                 if (protected)

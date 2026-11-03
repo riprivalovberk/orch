@@ -6,10 +6,12 @@
 #   plan | test | implement | review | security_review
 # (gate and approval tasks are run by the system and a human, never by an agent.)
 #
-# write_paths = repo globs the agent may write (enforced by write_file). A protected
-# directory (payments/) is only writable through a pattern that names it, so a broad
-# glob like minibank/** never reaches payments code. Plans that give implement work to
-# an agent who can write payments/ need a security review (PAY-001).
+# write_paths = repo globs the agent may write (enforced by write_file and edit_file).
+# Each task may also write only the paths its plan node lists, so the PM decides where
+# code goes. A protected directory (payments/, tests/) is only writable through a pattern
+# that names it, so a broad glob like ** never reaches payments code or the tests. Plans
+# that give implement work to an agent who can write payments/ need a security review
+# (PAY-001).
 
 team: fintech_sdlc
 pm: project_manager
@@ -36,7 +38,10 @@ agents:
          change. Plan only after they have answered.
       2. Call list_agents, then draft the whole plan as one graph. Give every test and
          implement node `paths`: the files or globs it will write, within its assignee's
-         write_paths. Order it: tests first, then the code, then review and gates.
+         write_paths. You decide where code goes: put it in the package the README names
+         (or the repo's existing package), plus any files the objective needs elsewhere,
+         such as deploy config at the repo root. Order it: tests first, then the code, then
+         review and gates.
       3. Fix the plan's `interface` before any code exists, so the tests and the code use the
          same names: each module path, its classes and public functions with exact names,
          arguments and return types, and the fields of what they return. Nothing else: no
@@ -53,8 +58,8 @@ agents:
       Writes pytest acceptance tests from the acceptance criteria before implementation
       starts. Each test is tagged with the criterion it covers.
     capabilities: [test]
-    tools: [read_file, list_files, search_code, write_file, run_tests, submit_artifact,
-            complete_task]
+    tools: [read_file, list_files, search_code, write_file, edit_file, run_tests,
+            submit_artifact, complete_task]
     write_paths: ["tests/**"]
     prompt: |
       Write focused pytest tests, one or more per acceptance criterion you were given.
@@ -73,27 +78,27 @@ agents:
       Implements features in the Python service so the acceptance tests pass, using
       Decimal for money, idempotent writes and no sensitive data in logs.
     capabilities: [implement]
-    tools: [read_file, list_files, search_code, write_file, run_tests, submit_artifact,
-            complete_task]
-    write_paths: ["minibank/**"]
+    tools: [read_file, list_files, search_code, write_file, edit_file, run_tests,
+            submit_artifact, complete_task]
+    write_paths: ["**"]  # wherever the plan sends it, except tests/ and payments/
     prompt: |
       Implement the planned interface in the worktree, exactly as named, following the
       engineering standards in your brief (classes with one job, pandas for tabular data, one
       name per behavior). Run the tests until they pass, then complete_task with a summary of
       what changed. If your task was reopened, address every finding from the previous review
       round first: the reviewer's recommendations are requirements.
-      Only create files through write_file, inside your task's paths. Never write code that
-      creates or copies files elsewhere, at import, test time or otherwise. If a test needs a
+      Only create files through write_file or edit_file, inside your task's paths. Never
+      write code that creates or copies files elsewhere, at import, test time or otherwise. If a test needs a
       file you may not write, leave it failing and say so in your complete_task summary.
 
   - name: payments_developer
     description: >-
-      Implements changes inside the payments package (minibank/payments/). The only
+      Implements changes inside a payments package (any payments/ directory). The only
       agent allowed to write payments code; its work always needs a security review.
     capabilities: [implement]
-    tools: [read_file, list_files, search_code, write_file, run_tests, submit_artifact,
-            complete_task]
-    write_paths: ["minibank/payments/**"]
+    tools: [read_file, list_files, search_code, write_file, edit_file, run_tests,
+            submit_artifact, complete_task]
+    write_paths: ["payments/**", "*/payments/**"]
     prompt: |
       Implement the change in the payments package. Use Decimal for money, keep writes
       idempotent and never log card or account numbers. Run the tests until they pass, then

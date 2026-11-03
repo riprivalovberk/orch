@@ -21,7 +21,7 @@ from orch.core.orchestrator import OrchestratorError, TaskOrchestrator
 from orch.core.scope import is_safe_relative, task_can_write
 from orch.domain.enums import REVIEW_KINDS, TaskKind, Verdict
 from orch.domain.schemas import Finding, ReviewVerdict
-from orch.policies.fintech_sdlc import SENSITIVE_DIRS
+from orch.policies.fintech_sdlc import PROTECTED_DIRS
 from orch.runtime import gates
 from orch.runtime.workspace import Workspace
 
@@ -147,18 +147,48 @@ def write_file(ctx: RunContext[WorkerDeps], path: str, content: str) -> dict[str
         path: repo-relative path
         content: the whole file
     """
-    d, c = ctx.deps, ctx.deps.caller
+    p = _writable(ctx.deps, path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(content)
+    return {"written": path, "bytes": len(content.encode())}
+
+
+def edit_file(
+    ctx: RunContext[WorkerDeps], path: str, old_text: str, new_text: str
+) -> dict[str, Any]:
+    """Change part of an existing file: replace old_text, which must occur exactly once,
+    with new_text. Use it for fixes instead of rewriting the whole file with write_file.
+
+    Args:
+        path: repo-relative path
+        old_text: text copied exactly from the file, with enough lines around it to be unique
+        new_text: what replaces it (empty deletes it)
+    """
+    p = _writable(ctx.deps, path)
+    if not p.is_file():
+        raise ModelRetry(f"{path} does not exist; create it with write_file")
+    text = p.read_text()
+    found = text.count(old_text) if old_text else 0
+    if found != 1:
+        raise ModelRetry(
+            f"old_text occurs {found} times in {path}; copy it exactly from read_file, "
+            "with enough surrounding lines to make it unique"
+        )
+    p.write_text(text.replace(old_text, new_text))
+    return {"edited": path, "bytes": len(p.read_bytes())}
+
+
+def _writable(d: WorkerDeps, path: str) -> Path:
+    """The file to write, once the task and agent scope allow it."""
+    c = d.caller
     if not d.writes:
         raise ModelRetry(f"{c.kind} tasks are read-only")
-    if not task_can_write(c.write_paths, c.paths, path, SENSITIVE_DIRS):
+    if not task_can_write(c.write_paths, c.paths, path, PROTECTED_DIRS):
         raise ModelRetry(
             f"{path} is outside this task's scope: your write_paths are {list(c.write_paths)} "
             f"and this task may write {list(c.paths)}"
         )
-    p = d.resolve(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(content)
-    return {"written": path, "bytes": len(content.encode())}
+    return d.resolve(path)
 
 
 def run_tests(ctx: RunContext[WorkerDeps], target: str = "") -> dict[str, Any]:
@@ -233,7 +263,7 @@ def complete_task(ctx: RunContext[WorkerDeps], summary: str) -> dict[str, Any]:
         # them, instead of spending a review round on them.
         changed = d.ws.changed_files(c.task_id)
         stray = [
-            f for f in changed if not task_can_write(c.write_paths, c.paths, f, SENSITIVE_DIRS)
+            f for f in changed if not task_can_write(c.write_paths, c.paths, f, PROTECTED_DIRS)
         ]
         if stray:
             # Something other than write_file made them, e.g. code that runs on import or
@@ -251,7 +281,10 @@ def complete_task(ctx: RunContext[WorkerDeps], summary: str) -> dict[str, Any]:
         if py:
             ok, out, _ = gates.ruff(d.root(), *py)
             if not ok:
-                raise ModelRetry(f"ruff fails on your files; fix it, then complete_task:\n{out}")
+                raise ModelRetry(
+                    "ruff fails on your files; fix each spot with edit_file, then "
+                    f"complete_task:\n{out}"
+                )
         sha = d.ws.commit(c.task_id, f"{c.agent}: {summary[:72]}\n\n{summary}", author=c.agent)
         rnd = d.orch.get_task(c.task_id)["revision_round"]
         if sha is None and rnd > 0:
@@ -303,6 +336,7 @@ WORKER_TOOLS = [
     list_files,
     search_code,
     write_file,
+    edit_file,
     run_tests,
     submit_artifact,
     complete_task,

@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy import text
 
 from orch.core.orchestrator import InvalidOperation, TaskOrchestrator
-from orch.domain.enums import GateName
+from orch.domain.enums import GateName, Verdict
 from orch.domain.enums import TaskStatus as S
 from orch.domain.schemas import Finding, GateResultIn, ProjectLimits, ReviewVerdict
 

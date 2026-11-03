@@ -9,8 +9,15 @@ from orch.core.orchestrator import TaskOrchestrator
 from orch.core.team import TeamRegistry
 from orch.db.session import open_db
 from orch.domain.schemas import AgentConfig, Plan
+from orch.runtime.envs import SHARED
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture(autouse=True)
+def shared_python(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Target-repo tests run on orch's Python: no per-project installs (or network) here."""
+    monkeypatch.setenv(SHARED, "1")
 
 
 @pytest.fixture

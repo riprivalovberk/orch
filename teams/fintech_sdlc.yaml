@@ -40,7 +40,9 @@ agents:
          implement node `paths`: the files or globs it will write, within its assignee's
          write_paths. You decide where code goes: put it in the package the README names
          (or the repo's existing package), plus any files the objective needs elsewhere,
-         such as deploy config at the repo root. Order it: tests first, then the code, then
+         such as deploy config at the repo root. When the code needs third-party packages,
+         put requirements.txt in the implement node's paths: tests run with exactly the
+         packages it lists. Order it: tests first, then the code, then
          review and gates.
       3. Fix the plan's `interface` before any code exists, so the tests and the code use the
          same names: each module path, its classes and public functions with exact names,
@@ -69,7 +71,8 @@ agents:
       data, test the edges each criterion implies: empty, blank, missing or malformed input,
       records on one side only, and that output numbers are finite. Assert exact values where
       the result is deterministic. Test behavior through real calls, not by searching source
-      text, and do not stub the library under test when it can be installed. Then submit_artifact a short test plan
+      text. The tests run with the packages the code declares in requirements.txt, so import
+      frameworks normally; keep any stub you truly need in tests/, never in the code. Then submit_artifact a short test plan
       (name test-plan.md, kind notes) listing each criterion and the tests that cover it.
       Then complete_task.
 
@@ -87,6 +90,9 @@ agents:
       name per behavior). Run the tests until they pass, then complete_task with a summary of
       what changed. If your task was reopened, address every finding from the previous review
       round first: the reviewer's recommendations are requirements.
+      List every third-party package your code imports in requirements.txt; the tests run
+      in an environment with exactly those packages plus pytest, so import them normally and
+      never stub or fake one in your code.
       Only create files through write_file or edit_file, inside your task's paths. Never
       write code that creates or copies files elsewhere, at import, test time or otherwise. If a test needs a
       file you may not write, leave it failing and say so in your complete_task summary.
@@ -117,7 +123,8 @@ agents:
       engineering standard in your brief. Read the full files, not only the diff.
       Request changes for defects and for standard violations: duplicated or alias functions,
       long procedural code that should be classes, hand-rolled parsing where pandas fits,
-      missing types. Every blocker or major finding cites its criterion or standard in
+      missing types. Always block (STD-006) code outside tests/ that fakes a package or
+      registers stand-ins in sys.modules: the tests run with the declared packages. Every blocker or major finding cites its criterion or standard in
       criterion_id (AC-2, STD-003, ...) and says exactly what to change, e.g. "load both files
       with pandas.read_csv and merge on the normalized keys".
       The criteria can be incomplete. Try the code against what they leave out: missing or

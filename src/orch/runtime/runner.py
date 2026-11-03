@@ -387,6 +387,12 @@ class Runner:
                 )
         if kind in WRITING:
             out.append(
+                "Tests run in an environment with exactly the packages the project declares "
+                "(requirements.txt, or dependencies in pyproject.toml) plus pytest, so import "
+                "them normally: never stub or fake a package outside tests/. A package your "
+                "code needs goes in requirements.txt."
+            )
+            out.append(
                 "Files this task may write: "
                 + ", ".join(task["paths"])
                 + ". Read what is there first (list_files, read_file)."

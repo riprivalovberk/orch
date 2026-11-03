@@ -16,6 +16,7 @@ from pathlib import Path
 from orch.core.scope import task_can_write
 from orch.domain.enums import GateName
 from orch.domain.schemas import GateResultIn
+from orch.runtime import envs
 
 TIMEOUT_S = 300
 TAIL = 6000
@@ -41,8 +42,15 @@ def _run(cmd: list[str], cwd: Path, *, timeout: float = TIMEOUT_S) -> tuple[int,
 
 
 def pytest(cwd: Path, *args: str, timeout: float = TIMEOUT_S) -> tuple[bool, str, int]:
+    """The project's tests, run with the packages it declares (see orch.runtime.envs)."""
+    t0 = time.monotonic()
+    try:
+        python = envs.python_for(cwd)
+    except envs.EnvError as e:
+        ms = int((time.monotonic() - t0) * 1000)
+        return False, f"{e}\nFix the package names or versions in requirements.txt.", ms
     code, out, ms = _run(
-        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", *args],
+        [python, "-m", "pytest", "-q", "-p", "no:cacheprovider", *args],
         cwd,
         timeout=timeout,
     )

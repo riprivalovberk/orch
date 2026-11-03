@@ -2,6 +2,7 @@
 
 SOD  segregation of duties     GATE  deterministic checks     COV  test coverage
 APR  human approval            PAY   payments code needs a security review
+SEC  code reachable over the network (HTTP endpoints, triggers) needs a security review
 SCOPE  every test/implement node says what it writes, and its assignee may write it
 IFACE  a plan that builds code fixes its interface first, so tests and code agree
 
@@ -10,12 +11,13 @@ STANDARDS are the engineering rules reviewers may block on, besides the acceptan
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 
 from orch.core.plan import PlanGraph, Rule, ValidationContext, err
 from orch.core.scope import can_write, protected_grants, touches
 from orch.domain.enums import REVIEW_KINDS, EdgeKind, GateName, TaskKind
-from orch.domain.schemas import PlanError
+from orch.domain.schemas import PlanError, PlanNode
 
 REQUIRED_GATES = frozenset({GateName.PYTEST, GateName.RUFF, GateName.POLICY})
 SENSITIVE_DIRS = frozenset({"payments"})
@@ -25,6 +27,11 @@ PROTECTED_DIRS = SENSITIVE_DIRS | {"tests"}
 BUILD_KINDS = frozenset({TaskKind.IMPLEMENT, TaskKind.TEST, *REVIEW_KINDS})
 WRITING_KINDS = (TaskKind.TEST, TaskKind.IMPLEMENT)
 MIN_INTERFACE_CHARS = 40
+# Criteria that put code behind a network endpoint: callers outside the team reach it.
+NETWORK_EXPOSURE = re.compile(
+    r"\b(https?|endpoint|route|api/|trigger|webhook|request param\w*|query param\w*)\b",
+    re.IGNORECASE,
+)
 
 STANDARDS: dict[str, str] = {
     "STD-001": "One name per behavior: no aliases, wrappers that only rename, or duplicate "
@@ -239,27 +246,44 @@ def pay_001_security_review(g: PlanGraph, ctx: ValidationContext) -> Iterable[Pl
             what = f"{n.id} is assigned to {n.assignee}, who can write {hits[0]}/ code"
         else:
             continue
-        if any(v.kind == TaskKind.SECURITY_REVIEW for v in g.verifiers_of(n.id)):
-            continue
-        specialists = [a for a in ctx.agents_with(TaskKind.SECURITY_REVIEW) if a != n.assignee]
-        if specialists:
-            yield err(
-                "PAY-001",
-                n.id,
-                f"{what}, so it needs a security review",
-                f"add a security_review node assigned to {specialists[0]} with a verifies "
-                f"edge from {n.id}",
-            )
-        else:
-            yield err(
-                "PAY-001",
-                n.id,
-                f"{what}, which requires a security review, but no agent in the team has "
-                "the security_review capability",
-                "a human must add a security reviewer to the team file; re-planning cannot "
-                "fix this",
-                escalate=True,
-            )
+        yield from _needs_security_review("PAY-001", n, what, g, ctx)
+
+
+def sec_001_network_exposure(g: PlanGraph, ctx: ValidationContext) -> Iterable[PlanError]:
+    """Code that criteria put behind a network endpoint needs a security review."""
+    exposed = sorted(
+        ac for ac, text in g.plan.acceptance_criteria.items() if NETWORK_EXPOSURE.search(text)
+    )
+    if not exposed:
+        return
+    for n in g.of_kind(TaskKind.IMPLEMENT):
+        what = f"{n.id} builds code that {exposed[0]} exposes over the network"
+        yield from _needs_security_review("SEC-001", n, what, g, ctx)
+
+
+def _needs_security_review(
+    rule: str, n: PlanNode, what: str, g: PlanGraph, ctx: ValidationContext
+) -> Iterable[PlanError]:
+    if any(v.kind == TaskKind.SECURITY_REVIEW for v in g.verifiers_of(n.id)):
+        return
+    specialists = [a for a in ctx.agents_with(TaskKind.SECURITY_REVIEW) if a != n.assignee]
+    if specialists:
+        yield err(
+            rule,
+            n.id,
+            f"{what}, so it needs a security review",
+            f"add a security_review node assigned to {specialists[0]} with a verifies "
+            f"edge from {n.id}",
+        )
+    else:
+        yield err(
+            rule,
+            n.id,
+            f"{what}, which requires a security review, but no agent in the team has "
+            "the security_review capability",
+            "a human must add a security reviewer to the team file; re-planning cannot fix this",
+            escalate=True,
+        )
 
 
 def iface_001_interface_first(g: PlanGraph, ctx: ValidationContext) -> Iterable[PlanError]:
@@ -284,5 +308,6 @@ RULES: tuple[Rule, ...] = (
     apr_001_single_approval,
     scope_001_paths,
     pay_001_security_review,
+    sec_001_network_exposure,
     iface_001_interface_first,
 )

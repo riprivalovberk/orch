@@ -659,6 +659,16 @@ class TaskOrchestrator:
                     "a GAP finding needs an assumption: the behavior the work should have "
                     f"until a human decides; missing on: {unassumed}"
                 )
+            agreed = sorted(self._root(s, v).acceptance_criteria or {})
+            if verdict.verdict == Verdict.APPROVE and v.kind == TaskKind.REVIEW:
+                shown = {c.criterion_id for c in verdict.checks if c.evidence.strip()}
+                unproven = [ac for ac in agreed if ac not in shown]
+                if unproven:
+                    raise InvalidOperation(
+                        "an approval needs a check for every acceptance criterion: the "
+                        "code (file:line) and the test that show it is met; missing for "
+                        f"{unproven}"
+                    )
             if verdict.verdict == Verdict.REQUEST_CHANGES:
                 blocking = [f for f in verdict.findings if f.severity in ("blocker", "major")]
                 if not blocking:
@@ -682,11 +692,11 @@ class TaskOrchestrator:
                         round=target.revision_round,
                         verdict=verdict.verdict,
                         findings=list(verdict.findings),
-                        summary=verdict.summary,
+                        summary=_with_checks(verdict),
                     )
                 )
             v.outcome = Outcome.PASS if verdict.verdict == Verdict.APPROVE else Outcome.FAIL
-            v.result_summary = verdict.summary
+            v.result_summary = _with_checks(verdict)
             self._transition(
                 s,
                 v,
@@ -1443,3 +1453,9 @@ class TaskOrchestrator:
         )
         self._transition(s, t, S.AWAITING_HUMAN, f"{kind} requested", actor=actor)
         return hr
+
+
+def _with_checks(verdict: ReviewVerdict) -> str:
+    """The review summary followed by what was checked for each criterion."""
+    lines = [f"- {c.criterion_id}: {c.evidence}" for c in verdict.checks]
+    return "\n".join([verdict.summary, *lines]) if lines else verdict.summary

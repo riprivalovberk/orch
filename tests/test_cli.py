@@ -30,7 +30,7 @@ def test_plan_check_bad():
             str(ROOT / "teams/fintech_sdlc.yaml"),
         ],
     )
-    assert r.exit_code == 1 and "PAY-001" in r.output and "needs a human" in r.output
+    assert r.exit_code == 1 and "PAY-001" in r.output and "security_reviewer" in r.output
 
 
 def test_nuke_deletes_the_data_dir(tmp_path, monkeypatch):

@@ -37,7 +37,7 @@ def test_missing_review_is_sod_001(good_plan, team):
     errors = check(edit(good_plan, drop_nodes=["review_transfer"]), team)
     assert "SOD-001" in codes(errors)
     sod = next(e for e in errors if e.code == "SOD-001")
-    assert sod.node == "implement_transfer" and "reviewer" in sod.hint
+    assert sod.node == "implement_transfer" and "code_reviewer" in sod.hint
 
 
 def test_self_review_is_sod_001(good_plan, team, team_with_security):
@@ -111,7 +111,10 @@ def test_gate_before_later_implementation_is_gate_002(good_plan, team):
 def test_one_gate_over_parallel_implementations_clears_gate_002(good_plan, team):
     p = edit(
         good_plan,
-        add_nodes=[SECOND_IMPL, {"id": "review_api", "kind": "review", "assignee": "reviewer"}],
+        add_nodes=[
+            SECOND_IMPL,
+            {"id": "review_api", "kind": "review", "assignee": "code_reviewer"},
+        ],
         add_edges=[
             ["write_tests", "implement_api"],
             ["implement_api", "gates", "verifies"],
@@ -176,6 +179,30 @@ def test_payments_with_specialist_needs_node_then_clears(good_plan, team_with_se
     assert check(fixed, team_with_security) == []
 
 
+def test_http_criterion_needs_security_review_then_clears(good_plan, team_with_security):
+    p = good_plan.model_copy(deep=True)
+    p.acceptance_criteria["AC-1"] = "GET /api/breaks returns HTTP 200 with JSON"
+    errors = check(p, team_with_security)
+    assert codes(errors) == ["SEC-001"] and "AC-1" in errors[0].message
+    assert "security_reviewer" in errors[0].hint
+
+    fixed = edit(
+        p,
+        add_nodes=[
+            {"id": "security_check", "kind": "security_review", "assignee": "security_reviewer"}
+        ],
+        add_edges=[["implement_transfer", "security_check", "verifies"]],
+    )
+    assert check(fixed, team_with_security) == []
+
+
+def test_http_criterion_without_specialist_escalates(good_plan, team):
+    p = good_plan.model_copy(deep=True)
+    p.acceptance_criteria["AC-1"] = "an HTTP trigger returns the breaks"
+    errors = check(p, team)
+    assert codes(errors) == ["SEC-001"] and errors[0].escalate
+
+
 def test_payments_work_given_to_developer_is_scope_001(good_plan, team):
     """The dodge from the first live spike: move payments work to an agent without review."""
     p = good_plan.model_copy(deep=True)
@@ -214,7 +241,8 @@ def test_bad_example_reports_everything(bad_plan, team):
 def test_cycle_is_reported_in_edge_order():
     nodes = [{"id": i, "kind": "implement", "assignee": "developer"} for i in "abcd"]
     edges = [["d", "a"], ["a", "b"], ["b", "c"], ["c", "a"]]
-    cycle = PlanGraph(Plan(objective="x", nodes=nodes, edges=edges)).find_cycle()
+    plan = Plan.model_validate({"objective": "x", "nodes": nodes, "edges": edges})
+    cycle = PlanGraph(plan).find_cycle()
     assert cycle is not None and cycle[0] == cycle[-1]
     pairs = set(itertools.pairwise(cycle))
     assert pairs == {("a", "b"), ("b", "c"), ("c", "a")}

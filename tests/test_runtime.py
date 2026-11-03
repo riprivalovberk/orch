@@ -332,7 +332,7 @@ def test_complete_task_removes_files_outside_the_task_paths(
     readme = (d / "README.md").read_text()
     (d / "host.json").write_text("{}\n")
     (d / "README.md").write_text("changed\n")
-    ws.commit(c.task_id, "earlier round", author="test_engineer")
+    ws.commit(c.task_id, "earlier round", author="test_developer")
     r = run(srv.call(c, "complete_task", {"summary": "tests"}))
     text = r.content[0].text  # type: ignore[union-attr]
     assert r.is_error and "README.md, host.json are outside" in text
@@ -347,7 +347,7 @@ def test_revision_without_changes_is_refused(
 ):
     srv, c, _ = worker(orch, team, ws, good_plan)
     run(srv.call(c, "write_file", {"path": "tests/test_transfers.py", "content": "X = 1\n"}))
-    ws.commit(c.task_id, "round 0", author="test_engineer")
+    ws.commit(c.task_id, "round 0", author="test_developer")
     real = orch.get_task
     monkeypatch.setattr(orch, "get_task", lambda tid: {**real(tid), "revision_round": 1})
     r = run(srv.call(c, "complete_task", {"summary": "no changes"}))
@@ -448,7 +448,7 @@ def test_briefs_name_the_work_other_steps_build(
             "assignee": "developer",
             "paths": ["minibank/api.py"],
         },
-        {"id": "review_api", "kind": "review", "assignee": "reviewer"},
+        {"id": "review_api", "kind": "review", "assignee": "code_reviewer"},
     ]
     plan["edges"] += [
         ["write_tests", "implement_api", "blocks"],

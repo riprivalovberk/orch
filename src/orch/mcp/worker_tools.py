@@ -20,7 +20,7 @@ from pydantic_ai import ModelRetry, RunContext
 from orch.core.orchestrator import OrchestratorError, TaskOrchestrator
 from orch.core.scope import is_safe_relative, task_can_write
 from orch.domain.enums import REVIEW_KINDS, TaskKind, Verdict
-from orch.domain.schemas import Finding, ReviewVerdict
+from orch.domain.schemas import Check, Finding, ReviewVerdict
 from orch.policies.fintech_sdlc import PROTECTED_DIRS
 from orch.runtime import gates
 from orch.runtime.workspace import Workspace
@@ -306,8 +306,13 @@ def submit_review(
     verdict: Verdict,
     summary: str,
     findings: list[Finding] | None = None,
+    checks: list[Check] | None = None,
 ) -> dict[str, Any]:
     """Record your review of the change.
+
+    An approve needs one check per acceptance criterion: where the code meets it
+    (file:line) and which test proves it, e.g. "reconcile.py:42 uses max(|a|,|b|);
+    test_ac3_threshold asserts 1.0% is not a break". Only claim what you read.
 
     request_changes needs at least one blocker or major finding whose criterion_id cites
     an acceptance criterion (AC-1, ...), an engineering standard (STD-001, ...) or GAP.
@@ -324,9 +329,12 @@ def submit_review(
         verdict: approve or request_changes
         summary: one paragraph on what you checked
         findings: issues found; severity blocker | major | minor
+        checks: per criterion, the code and test that show it is met
     """
     d, c = ctx.deps, ctx.deps.caller
-    v = ReviewVerdict(verdict=verdict, findings=findings or [], summary=summary)
+    v = ReviewVerdict(
+        verdict=verdict, findings=findings or [], summary=summary, checks=checks or []
+    )
     status = _call(d.orch.record_review, c.task_id, v, actor=c.agent)
     return {"status": status, "next": "Review recorded. Reply with one line and stop."}
 

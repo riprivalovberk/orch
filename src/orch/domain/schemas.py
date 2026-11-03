@@ -206,10 +206,18 @@ class Finding(BaseModel):
     assumption: str | None = None  # a GAP finding's stand-in requirement until a human rules
 
 
+class Check(BaseModel):
+    """What a reviewer checked for one criterion, and where: the proof behind an approval."""
+
+    criterion_id: str
+    evidence: str  # the code and tests that meet it, e.g. "reconcile.py:42; test_ac3_*"
+
+
 class ReviewVerdict(BaseModel):
     verdict: Verdict
     findings: list[Finding] = Field(default_factory=list)
     summary: str = ""
+    checks: list[Check] = Field(default_factory=list)
 
 
 class GateResultIn(BaseModel):

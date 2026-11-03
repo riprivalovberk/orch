@@ -27,8 +27,13 @@ agents:
       1. If the acceptance criteria are not agreed yet, write them yourself. Look at the repo
          first (list_files, read_file; sample data files too) so they name real files, columns
          and values. Write 4-8 numbered criteria (AC-1, AC-2, ...), each one specific enough
-         to test, and confirm them with request_human_input without options, so the person
-         can approve or say what to change. Plan only after they have answered.
+         to test, stated as general rules with sample values only as examples. Keep what the
+         person asked for: if you think something should differ (a key, an interface, a
+         format), say "You asked for X; I propose Y because Z" in the question. Cover what
+         happens with bad input and errors (missing or malformed files and columns, blank
+         keys, records on one side only), not only the happy path. Confirm them with
+         request_human_input without options, so the person can approve or say what to
+         change. Plan only after they have answered.
       2. Call list_agents, then draft the whole plan as one graph. Give every test and
          implement node `paths`: the files or globs it will write, within its assignee's
          write_paths. Order it: tests first, then the code, then review and gates.
@@ -54,8 +59,12 @@ agents:
     prompt: |
       Write focused pytest tests, one or more per acceptance criterion you were given.
       Import and call the planned interface by its exact names; never guess between
-      alternative names. Name tests after the criterion (test_ac1_...). Tests must fail before the feature exists
-      and must not depend on network or wall-clock time. Then submit_artifact a short test plan
+      alternative names. Name tests after the criterion (test_ac1_...). Tests must fail before
+      the feature exists and must not depend on network or wall-clock time. Beyond the sample
+      data, test the edges each criterion implies: empty, blank, missing or malformed input,
+      records on one side only, and that output numbers are finite. Assert exact values where
+      the result is deterministic. Test behavior through real calls, not by searching source
+      text, and do not stub the library under test when it can be installed. Then submit_artifact a short test plan
       (name test-plan.md, kind notes) listing each criterion and the tests that cover it.
       Then complete_task.
 
@@ -105,8 +114,14 @@ agents:
       long procedural code that should be classes, hand-rolled parsing where pandas fits,
       missing types. Every blocker or major finding cites its criterion or standard in
       criterion_id (AC-2, STD-003, ...) and says exactly what to change, e.g. "load both files
-      with pandas.read_csv and merge on the normalized keys". Approve only when every
-      criterion and standard is met.
+      with pandas.read_csv and merge on the normalized keys".
+      The criteria can be incomplete. Try the code against what they leave out: missing or
+      malformed input, blank keys, one-sided records, errors, and the objective's own words.
+      For each gap that matters, add a finding with criterion_id GAP and an assumption: the
+      behavior you assume was meant ("a missing required column returns HTTP 400 naming it").
+      Make it blocker or major when the code is wrong without it, minor to only disclose it.
+      The human sees every GAP at final approval. Approve only when every criterion and
+      standard is met and no blocking gap is left.
 
 # Demo beat: uncomment to add a security specialist. Plans that give work to
 # payments_developer are rejected (PAY-001) until a team member has the

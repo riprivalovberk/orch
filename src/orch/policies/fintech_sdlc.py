@@ -34,6 +34,10 @@ STANDARDS: dict[str, str] = {
     "classes, constants named, no dead code or commented-out code.",
     "STD-005": "Tests exercise the planned interface by its exact names; no guessing "
     "between alternative names (getattr/hasattr probing).",
+    "STD-006": "Fail loudly: bad or missing input (columns, files, parameters) raises or "
+    "returns a clear error naming it, never a silent default; no catch-all except that "
+    "hides a failure or stands in a fake for a missing dependency; output holds no NaN "
+    "or infinity.",
 }
 
 

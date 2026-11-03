@@ -48,7 +48,14 @@ from orch.domain.enums import (
     TaskStatus,
     Verdict,
 )
-from orch.domain.schemas import GateResultIn, Plan, PlanError, ProjectLimits, ReviewVerdict
+from orch.domain.schemas import (
+    SPEC_GAP,
+    GateResultIn,
+    Plan,
+    PlanError,
+    ProjectLimits,
+    ReviewVerdict,
+)
 from orch.ids import new_id, now_iso
 from orch.policies import get_pack, get_standards
 
@@ -632,14 +639,26 @@ class TaskOrchestrator:
     def record_review(
         self, review_task_id: str, verdict: ReviewVerdict, *, actor: str | None = None
     ) -> str:
-        """A reviewer's verdict. Blocking findings must cite an acceptance criterion or one of
-        the policy pack's engineering standards."""
+        """A reviewer's verdict. Blocking findings must cite an acceptance criterion, one of
+        the policy pack's engineering standards, or GAP: something the criteria leave out,
+        with the assumption the work should meet meanwhile (shown to the human at approval)."""
         with self.tx() as s:
             v = self._running(s, review_task_id)
             if v.kind not in REVIEW_KINDS:
                 raise InvalidOperation(f"{v.id} is a {v.kind} task, not a review")
             standards = get_standards(self._project(s, v.project_id).policy_pack)
             criteria = {**(self._root(s, v).acceptance_criteria or {}), **standards}
+            criteria[SPEC_GAP] = "a gap in the acceptance criteria"
+            unassumed = [
+                f.issue
+                for f in verdict.findings
+                if f.criterion_id == SPEC_GAP and not (f.assumption or "").strip()
+            ]
+            if unassumed:
+                raise InvalidOperation(
+                    "a GAP finding needs an assumption: the behavior the work should have "
+                    f"until a human decides; missing on: {unassumed}"
+                )
             if verdict.verdict == Verdict.REQUEST_CHANGES:
                 blocking = [f for f in verdict.findings if f.severity in ("blocker", "major")]
                 if not blocking:
@@ -1277,13 +1296,36 @@ class TaskOrchestrator:
             self._transition(s, t, S.READY, "dependencies satisfied")
             if t.kind == TaskKind.APPROVAL:
                 root = self._root(s, t)
+                prompt = f"All checks passed for: {root.objective}."
+                gaps = self._spec_gaps(s, root.id)
+                if gaps:
+                    prompt += (
+                        "\n\nReview found gaps in the agreed criteria; the work assumes:\n"
+                        + "\n".join(f"- {issue} Assumed: {assumed}" for issue, assumed in gaps)
+                    )
                 self._open_human(
                     s,
                     t,
                     HumanRequestKind.APPROVAL,
-                    f"All checks passed for: {root.objective}. Approve the change for merge?",
+                    prompt + "\n\nApprove the change for merge?",
                     ["approve", "reject"],
                 )
+
+    def _spec_gaps(self, s: Session, root_id: str) -> list[tuple[str, str]]:
+        """GAP findings from every review round of the objective, each issue once."""
+        rows = s.scalars(
+            select(Review)
+            .join(Task, Task.id == Review.target_task_id)
+            .where(Task.root_id == root_id)
+            .order_by(Review.round)
+        )
+        gaps = {
+            f.issue: f.assumption or ""
+            for r in rows
+            for f in r.findings
+            if f.criterion_id == SPEC_GAP
+        }
+        return list(gaps.items())
 
     def _evaluate_verification(self, s: Session, target: Task) -> None:
         """Once every verifier is done: pass the work, send it back for revision, or escalate."""

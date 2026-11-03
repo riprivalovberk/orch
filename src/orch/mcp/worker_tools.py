@@ -277,8 +277,15 @@ def submit_review(
     """Record your review of the change.
 
     request_changes needs at least one blocker or major finding whose criterion_id cites
-    an acceptance criterion (AC-1, ...) or an engineering standard (STD-001, ...). Say in
-    the issue exactly what to change. approve when every criterion and standard is met.
+    an acceptance criterion (AC-1, ...), an engineering standard (STD-001, ...) or GAP.
+    Say in the issue exactly what to change. approve when every criterion and standard is
+    met and nothing important is missing.
+
+    GAP is for what the criteria leave out but the work needs (bad input, errors, edge
+    cases) or where they drift from the objective. Give it an assumption: the behavior
+    the work should have, e.g. "a missing required column returns HTTP 400 naming it".
+    Blocking GAP findings go back to the developer; every GAP is shown to the human at
+    final approval, so state your assumptions plainly.
 
     Args:
         verdict: approve or request_changes

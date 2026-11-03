@@ -384,7 +384,11 @@ class Runner:
                     "before calling complete_task."
                 )
                 for r in fb["reviews"]:
-                    lines = [f"- [{f['severity']}] {f['issue']}" for f in r["findings"]]
+                    lines = [
+                        f"- [{f['severity']}] {f['issue']}"
+                        + (f" Assume: {f['assumption']}" if f.get("assumption") else "")
+                        for f in r["findings"]
+                    ]
                     out.append(
                         f"{r['reviewer']} ({r['verdict']}): {r['summary']}\n" + "\n".join(lines)
                     )

@@ -192,12 +192,16 @@ class PlanError(BaseModel):
 # --------------------------------------------------------------------------- verification
 
 
+SPEC_GAP = "GAP"  # criterion_id of a finding about something the agreed criteria leave out
+
+
 class Finding(BaseModel):
     severity: Literal["blocker", "major", "minor"]
     issue: str
     file: str | None = None
     line: int | None = None
     criterion_id: str | None = None
+    assumption: str | None = None  # a GAP finding's stand-in requirement until a human rules
 
 
 class ReviewVerdict(BaseModel):

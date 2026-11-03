@@ -313,6 +313,41 @@ def test_review_may_block_on_an_engineering_standard(orch, team, good_plan):
     assert review["findings"][0]["criterion_id"] == "STD-001"
 
 
+def test_spec_gaps_need_an_assumption_and_reach_the_approval(orch, team, good_plan):
+    pid, _, ids = planned(orch, team, good_plan)
+    impl, review = ids["implement_transfer"], ids["review_transfer"]
+    start(orch, ids["write_tests"])
+    orch.complete(ids["write_tests"], "ok")
+    start(orch, impl)
+    orch.complete(impl, "ok")
+    start(orch, ids["gates"])
+    orch.record_gate_results(ids["gates"], ALL_GATES)
+    start(orch, review)
+    gap = Finding(severity="major", issue="Nothing covers a missing column.", criterion_id="GAP")
+    with pytest.raises(InvalidOperation, match="needs an assumption"):
+        orch.record_review(review, ReviewVerdict(verdict=Verdict.REQUEST_CHANGES, findings=[gap]))
+    gap.assumption = "it returns HTTP 400 naming the column"
+    orch.record_review(review, ReviewVerdict(verdict=Verdict.REQUEST_CHANGES, findings=[gap]))
+    assert st(orch, impl) == S.READY  # a blocking gap sends the work back
+
+    start(orch, impl)
+    orch.complete(impl, "400 on a missing column")
+    start(orch, ids["gates"])
+    orch.record_gate_results(ids["gates"], ALL_GATES)
+    start(orch, review)
+    minor = Finding(
+        severity="minor",
+        issue="Nothing says how blank ids group.",
+        criterion_id="GAP",
+        assumption="each blank-id row stands alone",
+    )
+    orch.record_review(review, APPROVE.model_copy(update={"findings": [minor]}))
+    [req] = orch.open_human_requests(pid)
+    assert req["kind"] == "approval"
+    assert "Nothing covers a missing column. Assumed: it returns HTTP 400" in req["prompt"]
+    assert "Assumed: each blank-id row stands alone" in req["prompt"]
+
+
 def test_canceling_an_objective_cancels_its_tasks(orch, team, good_plan):
     pid, root, ids = planned(orch, team, good_plan)
     start(orch, ids["write_tests"])

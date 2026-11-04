@@ -25,7 +25,6 @@ app = typer.Typer(no_args_is_help=True, add_completion=False)
 
 DEFAULT_TEAM = Path("teams/fintech_sdlc.yaml")
 DEFAULT_BUDGET = 2.0
-TEMPLATE = Path(__file__).resolve().parents[2] / "examples" / "minibank"
 
 
 @app.command()
@@ -66,10 +65,6 @@ def plan_check(
 def _orch() -> TaskOrchestrator:
     data_dir().mkdir(parents=True, exist_ok=True)
     return TaskOrchestrator(open_db(db_path()))
-
-
-def _default_repo() -> Path:
-    return (data_dir() / "repos" / "minibank").resolve()
 
 
 def _criteria(items: list[str]) -> dict[str, str]:
@@ -144,8 +139,7 @@ def run(
     team: Path = typer.Option(DEFAULT_TEAM, help="Team YAML file"),
     repo: Path | None = typer.Option(
         None,
-        help="Target git repo (default: <data dir>/repos/minibank, made from the template; "
-        "on --resume, the objective's own repo)",
+        help="Target git repo with a main branch (on --resume, the objective's own repo)",
     ),
     parallel: int = typer.Option(3, min=1, help="Agents running at once"),
     model_name: str = typer.Option("", "--model", help="Model for every agent"),
@@ -165,7 +159,7 @@ def run(
     from orch.runtime.model import DEFAULT_MODEL, PRICES, meta_model
     from orch.runtime.runner import Runner
     from orch.runtime.scripted import TRANSFERS_CRITERIA, TRANSFERS_OBJECTIVE, scripted_team
-    from orch.runtime.workspace import Workspace
+    from orch.runtime.workspace import GitError, Workspace
 
     model_name = model_name or DEFAULT_MODEL
     if model_name not in PRICES:
@@ -182,21 +176,27 @@ def run(
         saved = orch.get_project(pid)["repo_path"]
         if repo and saved and repo != Path(saved):
             raise typer.BadParameter(f"{resume} runs in {saved}, not {repo}")
-        repo = Path(saved) if saved else repo or _default_repo()
+        repo = Path(saved) if saved else repo
         root = resume
     else:
         if offline and not objective:
             objective, ac = TRANSFERS_OBJECTIVE, [f"{k}={v}" for k, v in TRANSFERS_CRITERIA.items()]
         if not objective:
             raise typer.BadParameter("give an objective, or --resume <root task id>")
-        repo = repo or _default_repo()
+        if repo is None:
+            raise typer.BadParameter("give --repo, the target git repo the agents work in")
         pid = orch.project_for_repo(str(repo))
         if pid is None:
             limits = ProjectLimits(budget_usd=budget or DEFAULT_BUDGET)
             pid = orch.create_project(repo.name, repo_path=str(repo), limits=limits)
             budget = None  # already set
         root = ""
-    ws = Workspace.create(repo, data_dir() / "worktrees", template=TEMPLATE)
+    if repo is None:
+        raise typer.BadParameter(f"{resume} has no repo; give --repo")
+    try:
+        ws = Workspace.create(repo, data_dir() / "worktrees")
+    except GitError as e:
+        raise typer.BadParameter(str(e)) from e
     orch.register_team(pid, reg)  # on resume too: picks up team edits
     if budget is not None:
         orch.set_budget(pid, budget)
@@ -352,9 +352,7 @@ def ui(
 
     from orch.web.server import create_app
 
-    web = create_app(
-        _orch(), team_path=team.resolve(), template=TEMPLATE, default_budget=DEFAULT_BUDGET
-    )
+    web = create_app(_orch(), team_path=team.resolve(), default_budget=DEFAULT_BUDGET)
     typer.secho(f"orch ui on http://{host}:{port}  (data in {data_dir()})", bold=True)
     uvicorn.run(web, host=host, port=port, log_level="warning")
 

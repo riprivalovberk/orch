@@ -12,6 +12,18 @@ from orch.domain.schemas import Plan
 from orch.runtime.envs import SHARED
 
 ROOT = Path(__file__).resolve().parents[1]
+# The sample bank app the scripted team builds on. Its own repo lives outside orch; this copy
+# is a fixture, and its tests are not orch's.
+MINIBANK = ROOT / "tests" / "fixtures" / "minibank"
+collect_ignore = ["fixtures"]
+
+
+def minibank_repo(path: Path) -> Path:
+    """A fresh git repo (main, one commit) holding the minibank fixture."""
+    from orch.runtime.workspace import Workspace
+
+    Workspace.create(path, path.parent / f"{path.name}-wt", template=MINIBANK)
+    return path
 
 
 @pytest.fixture(autouse=True)

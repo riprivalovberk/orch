@@ -14,7 +14,7 @@ from orch.core.orchestrator import TaskOrchestrator
 from orch.db.session import open_db
 from orch.web.server import RunInfo, RunOptions, _track, create_app
 
-from .conftest import ROOT
+from .conftest import ROOT, minibank_repo
 
 
 @pytest.fixture
@@ -24,7 +24,6 @@ def client(tmp_path: Path, monkeypatch) -> TestClient:
     app = create_app(
         orch,
         team_path=ROOT / "teams" / "fintech_sdlc.yaml",
-        template=ROOT / "examples" / "minibank",
     )
     return TestClient(app)
 
@@ -47,12 +46,10 @@ def wait_for_run(c: TestClient, root: str, timeout: float = 60) -> dict:
 def test_offline_objective_runs_through_approval_to_main(client: TestClient, tmp_path: Path):
     c = client
     assert c.get("/").status_code == 200
-    p = c.post(
-        "/api/projects", json={"name": "Mini Bank", "budget": 3, "starter": "minibank"}
-    ).json()
-    assert p["repo_path"] == str(tmp_path / "repos" / "mini-bank")
-    assert (tmp_path / "repos" / "mini-bank" / ".git").exists()
-    assert c.post("/api/projects", json={"name": "Mini Bank"}).status_code == 409
+    bank = str(minibank_repo(tmp_path / "bank"))
+    p = c.post("/api/projects", json={"name": "Mini Bank", "budget": 3, "repo": bank}).json()
+    assert p["repo_path"] == bank
+    assert c.post("/api/projects", json={"name": "again", "repo": bank}).status_code == 409
 
     r = c.post(f"/api/projects/{p['id']}/objectives", json={"offline": True}).json()
     ob = wait_for_run(c, r["root_id"])
@@ -221,8 +218,6 @@ def test_new_projects_start_empty(client: TestClient):
     assert 'name = "positions-rec"' in toml and 'known-first-party = ["positions_rec"]' in toml
     r = client.post(f"/api/projects/{p['id']}/objectives", json={"offline": True})
     assert r.status_code == 400 and "minibank" in r.json()["error"]
-    bad = client.post("/api/projects", json={"name": "y", "starter": "django"})
-    assert bad.status_code == 400
 
 
 def test_file_preview_reads_main(client: TestClient):
@@ -270,7 +265,6 @@ def make_client(tmp_path: Path, monkeypatch, model=None, env_text: str | None = 
     app = create_app(
         orch,
         team_path=ROOT / "teams" / "fintech_sdlc.yaml",
-        template=ROOT / "examples" / "minibank",
         env_file=env,
         chat_model=model,
     )
@@ -298,7 +292,8 @@ def test_pm_answers_where_the_code_is(tmp_path: Path, monkeypatch):
         return "It is on the objective branch, not merged yet."
 
     c, _ = make_client(tmp_path, monkeypatch)
-    p = c.post("/api/projects", json={"name": "bank", "starter": "minibank"}).json()
+    bank = str(minibank_repo(tmp_path / "bank"))
+    p = c.post("/api/projects", json={"name": "bank", "repo": bank}).json()
     r = c.post(f"/api/projects/{p['id']}/objectives", json={"offline": True}).json()
     wait_for_run(c, r["root_id"])  # stops at the approval: code is on obj/<root> only
     calls = [
@@ -383,7 +378,8 @@ def test_api_key_is_saved_to_env_and_never_shown(tmp_path: Path, monkeypatch):
 
 def test_rejecting_the_change_says_what_to_do_next(client: TestClient, tmp_path: Path):
     c = client
-    p = c.post("/api/projects", json={"name": "Rej", "starter": "minibank"}).json()
+    bank = str(minibank_repo(tmp_path / "bank"))
+    p = c.post("/api/projects", json={"name": "Rej", "repo": bank}).json()
     r = c.post(f"/api/projects/{p['id']}/objectives", json={"offline": True}).json()
     [req] = wait_for_run(c, r["root_id"])["requests"]
     c.post(f"/api/requests/{req['id']}/answer", json={"response": "reject"})

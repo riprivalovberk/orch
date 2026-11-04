@@ -18,13 +18,14 @@ uv run pytest
 uv run orch agents
 uv run orch plan-check examples/plan_transfers.yaml   # clears
 uv run orch plan-check examples/plan_bad.yaml         # rejected, with node-level errors
-uv run orch run --offline                             # whole flow, scripted team, no network
+uv run orch run --offline --repo <minibank copy>      # whole flow, scripted team, no network
 ```
 
 ## Running an objective
 
 ```bash
-uv run orch run "Add an idempotent POST /transfers endpoint in minibank/api/transfers.py" \
+uv run orch run --repo ~/code/minibank \
+  "Add an idempotent POST /transfers endpoint in minibank/api/transfers.py" \
   --ac "A repeated Idempotency-Key never double-posts" --ac "Amounts are Decimal, never float"
 ```
 
@@ -45,9 +46,10 @@ uv run orch run --resume <objective>   # carry on
 uv run orch evidence <objective>       # audit pack: plans, gates, reviews, approvals, chain check
 ```
 
-The target repo defaults to `.orch/repos/minibank`, made on first run from
-`examples/minibank/` (a tiny bank service with a protected `payments/` package); pass
-`--repo` for another git repo (`--resume` always continues in the objective's own repo).
+`--repo` is the target git repo (it needs a `main` branch); approved changes merge into its
+`main`, and `--resume` always continues in the objective's own repo. The sample app the demos
+use, minibank (a tiny bank service with a protected `payments/` package), is its own repo
+next to orch, not part of it; `--offline` only works on a copy of it.
 Each repo gets one project whose budget covers all its objectives: $2.00 to start,
 changed with `--budget`. Every agent uses `muse-spark-1.3-contributor` unless `--model`
 says otherwise. Workers can hand in non-code files (test reports, notes) with
@@ -71,8 +73,9 @@ answer in place (answering resumes the run). A collapsible Files panel on the ri
 repo's files, previews them and uploads new ones (committed to `main`, so every new
 objective's agents can read them).
 
-New projects start as an empty Python project in their own folder (pick the minibank sample
-for the offline demo). Everything else is on the project's details page and the top bar:
+A project points at a git repo you already have (type the path or Browse…), or at a new or
+empty folder, which starts as an empty Python project. The offline demo needs a project whose
+repo is a copy of minibank. Everything else is on the project's details page and the top bar:
 budget, objectives with their tasks, gates, reviews, diffs and evidence pack, the filtered
 event log, the event-chain check, the team, plan check, clean-up and the model API key
 (Admin; saved to `.env`). Runs started in the UI
@@ -93,6 +96,6 @@ src/orch/
   web/           the web UI (orch ui): Starlette JSON API + one HTML page
   paths.py       the one data folder (.orch/)
 teams/           the agent team (YAML)
-examples/        sample plans; minibank/ (the target app template)
+examples/        sample plans (Plan check) and sample data
 docs/            design notes (mcp-design.md)
 ```

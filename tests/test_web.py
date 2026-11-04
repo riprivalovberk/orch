@@ -12,7 +12,7 @@ from starlette.testclient import TestClient
 
 from orch.core.orchestrator import TaskOrchestrator
 from orch.db.session import open_db
-from orch.web.server import RunInfo, RunOptions, create_app
+from orch.web.server import RunInfo, RunOptions, _track, create_app
 
 from .conftest import ROOT
 
@@ -88,6 +88,8 @@ def test_offline_objective_runs_through_approval_to_main(client: TestClient, tmp
     assert [s["node"] for s in steps][:3] == ["plan", "write_tests", "implement_transfer"]
     assert all(s["state"] == "done" for s in steps)
     assert all(s["started"] and s["ended"] for s in steps)
+    assert all(s["since"] is None for s in steps)
+    assert next(s for s in steps if s["node"] == "approve")["busy_ms"] == 0  # your wait
     gate = next(s for s in steps if s["node"] == "gates")
     assert gate["note"] == "all checks passed" and gate["log"]
     assert not any("started" in m["text"] for m in chat if m["role"] == "activity")
@@ -370,3 +372,22 @@ def test_api_key_is_saved_to_env_and_never_shown(tmp_path: Path, monkeypatch):
     assert bad.status_code == 400
     gone = c.post("/api/settings/api-key", json={"remove": True}).json()["api_key"]
     assert not gone["set"] and env.read_text() == "OTHER=1\n"
+
+
+def test_step_time_counts_only_working_time():
+    # a gate that ran twice, two minutes apart, because a reviewer sent the code back
+    d: dict = {"started": None, "ended": None}
+    for frm, to, ts in [
+        ("READY", "RUNNING", "2026-11-04T02:43:22.000+00:00"),
+        ("RUNNING", "DONE", "2026-11-04T02:43:22.600+00:00"),
+        ("DONE", "PENDING", "2026-11-04T02:44:46.000+00:00"),
+        ("PENDING", "READY", "2026-11-04T02:45:16.000+00:00"),
+        ("READY", "RUNNING", "2026-11-04T02:45:18.000+00:00"),
+        ("RUNNING", "DONE", "2026-11-04T02:45:18.500+00:00"),
+    ]:
+        _track(d, {"from": frm, "to": to}, ts)
+    assert d["busy_ms"] == 1100 and d["since"] is None
+    assert (d["started"], d["ended"]) == (
+        "2026-11-04T02:43:22.000+00:00",
+        "2026-11-04T02:45:18.500+00:00",
+    )

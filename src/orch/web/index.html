@@ -411,16 +411,23 @@ const STEP_LABEL = {done: "done", failed: "failed", running: "working", checking
 const openSteps = new Set();
 
 function fmtDur(ms) {
+  if (ms > 0 && ms < 1000) return "<1s";
   const s = Math.max(0, Math.round(ms / 1000));
   if (s < 60) return `${s}s`;
   if (s < 3600) return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
   return `${Math.floor(s / 3600)}h ${Math.floor(s / 60) % 60}m`;
 }
 function durAttrs(start, end) { return start ? `data-start="${esc(start)}"${end ? ` data-end="${esc(end)}"` : ""}` : ""; }
+// a step shows only its working time (summed over review rounds); the header shows the whole run
+function busyAttrs(x) { return x.busy_ms || x.since ? `data-busy="${x.busy_ms || 0}"${x.since ? ` data-since="${esc(x.since)}"` : ""}` : ""; }
 function tickDurations() {
   document.querySelectorAll(".dur[data-start]").forEach(el => {
     const end = el.dataset.end ? Date.parse(el.dataset.end) : Date.now();
     el.textContent = fmtDur(end - Date.parse(el.dataset.start));
+  });
+  document.querySelectorAll(".dur[data-busy]").forEach(el => {
+    const live = el.dataset.since ? Date.now() - Date.parse(el.dataset.since) : 0;
+    el.textContent = fmtDur(Number(el.dataset.busy) + live);
   });
 }
 setInterval(tickDurations, 1000);
@@ -437,7 +444,7 @@ function stepsHtml(steps) {
     return `<details class="st-${x.state}" data-step="${x.id}" ${openSteps.has(x.id) ? "open" : ""}
       ontoggle="this.open ? openSteps.add(this.dataset.step) : openSteps.delete(this.dataset.step)">
       <summary><span class="ic"></span><span class="nm">${esc(x.node)}</span><span class="sub">${sub}</span>
-      <span class="dur" ${durAttrs(x.started, x.ended)}></span></summary>${log ? `<div class="log">${log}</div>` : ""}</details>`;
+      <span class="dur" ${busyAttrs(x)}></span></summary>${log ? `<div class="log">${log}</div>` : ""}</details>`;
   }).join("")}</div>`;
 }
 

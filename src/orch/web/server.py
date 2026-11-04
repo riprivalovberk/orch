@@ -18,6 +18,7 @@ import subprocess
 import threading
 import traceback
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -391,15 +392,25 @@ STEP_STATE = {
 }
 
 
-def _track(d: dict[str, str | None], p: dict[str, Any], ts: str) -> None:
-    """A step's clock: from its first start to when it last finished (cleared if reopened)."""
+def _track(d: dict[str, Any], p: dict[str, Any], ts: str) -> None:
+    """A step's clocks. started/ended span the whole step (cleared if reopened); busy_ms adds up
+    only the time spent RUNNING, so waits between review rounds and for a person don't count."""
     to = p["to"]
+    if p["from"] == "RUNNING" and d.get("since"):
+        d["busy_ms"] = d.get("busy_ms", 0) + _ms(ts) - _ms(d["since"])
+        d["since"] = None
+    if to == "RUNNING":
+        d["since"] = ts
     if to in ("RUNNING", "AWAITING_HUMAN") and not d["started"]:
         d["started"] = ts
     if to in ("DONE", "FAILED", "CANCELED", "WAITING"):
         d["ended"] = d["ended"] if p["from"] == "WAITING" else ts  # root: planning time only
     elif to in ("READY", "RUNNING"):
         d["ended"] = None
+
+
+def _ms(ts: str) -> int:
+    return int(datetime.fromisoformat(ts).timestamp() * 1000)
 
 
 def _step_note(t: dict[str, Any], p: dict[str, Any]) -> str:
@@ -433,6 +444,8 @@ def _steps(
             "note": "",
             "started": clock.get("started"),
             "ended": clock.get("ended"),
+            "busy_ms": clock.get("busy_ms", 0),
+            "since": clock.get("since") if plan_state == "running" else None,
             "log": [],
         }
     ]
@@ -457,6 +470,8 @@ def _steps(
                 "note": note,
                 "started": c.get("started"),
                 "ended": c.get("ended") if state not in ("running", "checking") else None,
+                "busy_ms": c.get("busy_ms", 0),
+                "since": c.get("since") if state == "running" else None,
                 "log": logs.get(tid, []),
             }
         )

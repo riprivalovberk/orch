@@ -90,6 +90,13 @@ def test_offline_objective_runs_through_approval_to_main(client: TestClient, tmp
     assert all(s["started"] and s["ended"] for s in steps)
     assert all(s["since"] is None for s in steps)
     assert next(s for s in steps if s["node"] == "approve")["busy_ms"] == 0  # your wait
+    # ...and a timeline of everything that happened, in order
+    tl = next(m for m in chat if m.get("steps"))["timeline"]
+    assert [x["ts"] for x in tl] == sorted(x["ts"] for x in tl)
+    said = [x["text"] for x in tl]
+    assert any(t.startswith("plan v1 passed the checks") for t in said)
+    assert "orch asked you to approve the change for merge" in said
+    assert "you answered: approve" in said and "merged into main" in said
     gate = next(s for s in steps if s["node"] == "gates")
     assert gate["note"] == "all checks passed" and gate["log"]
     assert not any("started" in m["text"] for m in chat if m["role"] == "activity")

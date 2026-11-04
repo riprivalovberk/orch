@@ -314,6 +314,13 @@ def chat_messages(orch: TaskOrchestrator, runs: Runs, pid: str) -> dict[str, Any
     timing: dict[str, dict[str, str | None]] = {}
     logs: dict[str, list[dict[str, str]]] = {}
     notes: dict[str, str] = {}
+    # Each objective's timeline: everything that happened to it, in order, handoffs included.
+    timeline: dict[str, list[dict[str, str]]] = {}
+
+    def mark(root: str | None, e: dict[str, Any], text: str, kind: str = "step") -> None:
+        if root:
+            timeline.setdefault(root, []).append({"ts": e["ts"], "text": text, "kind": kind})
+
     events = orch.list_events(project_id=pid, limit=20_000)
     from_chat = {e["payload"].get("objective_id") for e in events if e["type"] == "chat.reply"} - {
         None
@@ -338,13 +345,29 @@ def chat_messages(orch: TaskOrchestrator, runs: Runs, pid: str) -> dict[str, Any
             rid = p["request_id"]
             req = {"id": rid, "kind": p["kind"], "options": p["options"], "open": rid in open_reqs}
             out.append(_msg(e, "pm", p["prompt"], root_id=root, request=req))
+            if p["kind"] == "approval":
+                mark(root, e, "orch asked you to approve the change for merge", "human")
+            elif p["prompt"].startswith("AC-1"):
+                mark(root, e, "project_manager sent you the acceptance criteria", "human")
+            else:
+                mark(
+                    root,
+                    e,
+                    f"project_manager asked you: {p['prompt'].splitlines()[0][:80]}",
+                    "human",
+                )
         elif kind == "human.responded":
             out.append(_msg(e, "user", p["response"], root_id=root))
+            mark(root, e, f"you answered: {p['response'].splitlines()[0][:80]}", "human")
+        elif kind == "plan.checked" and not p["valid"]:
+            codes = ", ".join(sorted({err["code"] for err in p["errors"]}))
+            mark(root, e, f"project_manager's draft plan failed checks ({codes}); revising", "fail")
         elif kind == "plan.rejected":
             codes = ", ".join(sorted({err["code"] for err in p["errors"]}))
             out.append(
                 _msg(e, "activity", f"plan v{p['version']} failed checks ({codes}); revising")
             )
+            mark(root, e, f"plan v{p['version']} rejected ({codes}); revising", "fail")
         elif kind == "plan.accepted":
             # Task ids are time-ordered, so sorting them gives the order the PM wrote the plan.
             ids = sorted(p["tasks"].values()) if isinstance(p["tasks"], dict) else []
@@ -356,9 +379,23 @@ def chat_messages(orch: TaskOrchestrator, runs: Runs, pid: str) -> dict[str, Any
             out.append(_msg(e, "pm", text, root_id=root, plan=steps, criteria=crit))
             if root:
                 plan_msgs[root] = out[-1]
+            mark(root, e, f"plan v{p['version']} passed the checks: {len(steps)} steps")
         elif kind == "task.status" and t:
             _track(timing.setdefault(tid, {"started": None, "ended": None}), p, e["ts"])
             line = _status_line(t, p, tid in objectives)
+            if p.get("reason") == "changes requested":  # a handoff back to the agent
+                by = [tasks[v]["assignee"] for v in p.get("failed_verifiers", []) if v in tasks]
+                mark(
+                    root,
+                    e,
+                    f"{' and '.join(filter(None, by)) or 'review'} sent {t['node']} back to "
+                    f"{t['assignee']} for changes (round {p.get('round', '?')})",
+                    "back",
+                )
+            elif line:
+                failed = p["to"] == "FAILED" or "FAILED" in line or "request_changes" in line
+                label = line.removeprefix("checks: ") if t["kind"] == "gate" else line
+                mark(root, e, label, "fail" if failed else "done" if tid in objectives else "step")
             if tid not in objectives:  # a planned step: shown in its row on the plan
                 if line:
                     logs.setdefault(tid, []).append({"ts": e["ts"], "text": line})
@@ -372,6 +409,7 @@ def chat_messages(orch: TaskOrchestrator, runs: Runs, pid: str) -> dict[str, Any
                 out.append(_msg(e, role, line, root_id=root))
         elif kind == "workspace.merged_to_main":
             out.append(_msg(e, "pm", f"Merged into main ({p['detail'][:10]}).", root_id=root))
+            mark(root, e, "merged into main", "done")
         elif kind == "workspace.merge_conflict":
             out.append(_msg(e, "activity", f"merge conflict on {p['branch']}", root_id=root))
         elif kind == "artifact.added" and t and tid not in objectives:
@@ -382,6 +420,7 @@ def chat_messages(orch: TaskOrchestrator, runs: Runs, pid: str) -> dict[str, Any
             out.append(_msg(e, "activity", f"uploaded {', '.join(p['files'])}"))
     for root, m in plan_msgs.items():
         m["steps"] = _steps(root, tasks, timing, logs, notes)
+        m["timeline"] = timeline.get(root, [])
     working: list[str] = ["the PM is writing a reply"] if pid in runs.chatting else []
     for rid in runs.running():
         for t in orch.task_tree(rid) if rid in objectives else []:

@@ -393,6 +393,22 @@ def test_step_time_counts_only_working_time():
     )
 
 
+def test_time_waiting_on_a_person_is_kept_apart():
+    # the PM asks for sign-off on the criteria, the person answers 20 minutes later
+    d: dict = {"started": None, "ended": None}
+    for frm, to, ts in [
+        ("READY", "RUNNING", "2026-11-04T15:28:00.000+00:00"),
+        ("RUNNING", "AWAITING_HUMAN", "2026-11-04T15:28:40.000+00:00"),
+        ("AWAITING_HUMAN", "READY", "2026-11-04T15:48:40.000+00:00"),
+        ("READY", "RUNNING", "2026-11-04T15:48:41.000+00:00"),
+    ]:
+        _track(d, {"from": frm, "to": to}, ts)
+    assert d["waited_ms"] == 20 * 60 * 1000 and d["waiting_since"] is None
+    assert d["busy_ms"] == 40_000 and d["since"] == "2026-11-04T15:48:41.000+00:00"
+    _track(d, {"from": "RUNNING", "to": "AWAITING_HUMAN"}, "2026-11-04T15:49:00.000+00:00")
+    assert d["waiting_since"] == "2026-11-04T15:49:00.000+00:00"
+
+
 def test_choose_folder_returns_the_dialogs_pick_or_null(client: TestClient, monkeypatch):
     from orch.web import server
 

@@ -436,13 +436,19 @@ STEP_STATE = {
 
 def _track(d: dict[str, Any], p: dict[str, Any], ts: str) -> None:
     """A step's clocks. started/ended span the whole step (cleared if reopened); busy_ms adds up
-    only the time spent RUNNING, so waits between review rounds and for a person don't count."""
+    only the time spent RUNNING, so waits between review rounds and for a person don't count;
+    waited_ms adds up the time spent waiting on a person, which the run's total leaves out."""
     to = p["to"]
     if p["from"] == "RUNNING" and d.get("since"):
         d["busy_ms"] = d.get("busy_ms", 0) + _ms(ts) - _ms(d["since"])
         d["since"] = None
+    if p["from"] == "AWAITING_HUMAN" and d.get("waiting_since"):
+        d["waited_ms"] = d.get("waited_ms", 0) + _ms(ts) - _ms(d["waiting_since"])
+        d["waiting_since"] = None
     if to == "RUNNING":
         d["since"] = ts
+    elif to == "AWAITING_HUMAN":
+        d["waiting_since"] = ts
     if to in ("RUNNING", "AWAITING_HUMAN") and not d["started"]:
         d["started"] = ts
     if to in ("DONE", "FAILED", "CANCELED", "WAITING"):
@@ -488,6 +494,8 @@ def _steps(
             "ended": clock.get("ended"),
             "busy_ms": clock.get("busy_ms", 0),
             "since": clock.get("since") if plan_state == "running" else None,
+            "waited_ms": clock.get("waited_ms", 0),
+            "waiting_since": clock.get("waiting_since") if plan_state == "needs_you" else None,
             "log": [],
         }
     ]
@@ -514,6 +522,8 @@ def _steps(
                 "ended": c.get("ended") if state not in ("running", "checking") else None,
                 "busy_ms": c.get("busy_ms", 0),
                 "since": c.get("since") if state == "running" else None,
+                "waited_ms": c.get("waited_ms", 0),
+                "waiting_since": c.get("waiting_since") if state == "needs_you" else None,
                 "log": logs.get(tid, []),
             }
         )

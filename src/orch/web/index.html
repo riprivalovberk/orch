@@ -422,10 +422,17 @@ function fmtDur(ms) {
 function durAttrs(start, end) { return start ? `data-start="${esc(start)}"${end ? ` data-end="${esc(end)}"` : ""}` : ""; }
 // a step shows only its working time (summed over review rounds); the header shows the whole run
 function busyAttrs(x) { return x.busy_ms || x.since ? `data-busy="${x.busy_ms || 0}"${x.since ? ` data-since="${esc(x.since)}"` : ""}` : ""; }
+// the run's total leaves out time spent waiting on a person, so it stops while a decision waits
+function waitAttrs(steps) {
+  const since = steps.map(x => x.waiting_since).filter(Boolean);
+  return ` data-wait="${steps.reduce((n, x) => n + (x.waited_ms || 0), 0)}"${since.length ? ` data-wait-since="${esc(since.join(","))}"` : ""}`;
+}
 function tickDurations() {
   document.querySelectorAll(".dur[data-start]").forEach(el => {
-    const end = el.dataset.end ? Date.parse(el.dataset.end) : Date.now();
-    el.textContent = fmtDur(end - Date.parse(el.dataset.start));
+    const now = Date.now(), end = el.dataset.end ? Date.parse(el.dataset.end) : now;
+    const waiting = (el.dataset.waitSince || "").split(",").filter(Boolean)
+      .reduce((n, t) => n + Math.max(0, now - Date.parse(t)), 0);
+    el.textContent = fmtDur(end - Date.parse(el.dataset.start) - Number(el.dataset.wait || 0) - waiting);
   });
   document.querySelectorAll(".dur[data-busy]").forEach(el => {
     const live = el.dataset.since ? Date.now() - Date.parse(el.dataset.since) : 0;
@@ -439,7 +446,7 @@ function stepsHtml(steps) {
   const live = steps.some(x => ["running", "checking", "needs_you", "queued"].includes(x.state));
   const first = steps.find(x => x.started), last = steps.map(x => x.ended).filter(Boolean).sort().pop();
   const head = `<div class="wf-head"><span>${done} of ${steps.length} steps done</span>
-    <span class="dur" ${first ? durAttrs(first.started, live ? null : last) : ""}></span></div>`;
+    <span class="dur" ${first ? durAttrs(first.started, live ? null : last) + waitAttrs(steps) : ""}></span></div>`;
   return `<div class="wf">${head}${steps.map(x => {
     const sub = [x.assignee, STEP_LABEL[x.state], x.note].filter(Boolean).map(esc).join(" · ");
     const log = x.log.map(l => `<div><span class="mono">${esc(new Date(l.ts).toLocaleTimeString([], {hour12: false}))}</span> ${esc(l.text)}</div>`).join("");

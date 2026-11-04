@@ -592,3 +592,32 @@ def test_writing_briefs_show_csv_heads_and_implement_briefs_show_tests(
     assert "tests/test_x.py:\n```python\ndef test_x():" in impl_brief
     tests_brief = r.brief(orch.get_task(c.task_id))
     assert "data/pos.csv (first lines)" in tests_brief and "tests/test_x.py:" not in tests_brief
+
+
+def test_cli_resume_keeps_the_model_it_started_with(tmp_path: Path, monkeypatch):
+    from pydantic_ai.models.function import FunctionModel
+
+    from orch.runtime import model
+
+    used: list[str] = []
+
+    def fake_meta(name: str, **_: object) -> FunctionModel:
+        used.append(name)
+        team = scripted.scripted_team().function
+        assert team is not None
+        return FunctionModel(team, model_name=name)
+
+    monkeypatch.setattr(model, "meta_model", fake_meta)
+    monkeypatch.setenv("ORCH_DATA_DIR", str(tmp_path / "data"))
+    cli = CliRunner()
+    repo = str(minibank_repo(tmp_path / "bank"))
+    acs = [a for k, v in scripted.TRANSFERS_CRITERIA.items() for a in ("--ac", f"{k}={v}")]
+    first = [scripted.TRANSFERS_OBJECTIVE, *acs, "--repo", repo, "--no-interactive"]
+    r = cli.invoke(app, ["run", *first, "--model", "muse-spark-1.3-contributor"])
+    assert "waiting on hum_" in r.output, r.output
+    inbox = cli.invoke(app, ["inbox"]).output
+    req, root = inbox.split()[0], inbox.split("objective ")[1].split(")")[0]
+    assert cli.invoke(app, ["approve", req]).exit_code == 0
+    r = cli.invoke(app, ["run", "--resume", root, "--no-interactive"])
+    assert "merged into main" in r.output, r.output
+    assert used == ["muse-spark-1.3-contributor"] * 2

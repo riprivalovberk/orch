@@ -1,3 +1,5 @@
+import subprocess
+
 from typer.testing import CliRunner
 
 from orch.cli import app
@@ -53,3 +55,18 @@ def test_nuke_one_section(tmp_path, monkeypatch):
     assert runner.invoke(app, ["nuke", "spike", "-y"]).exit_code == 0
     assert not (tmp_path / "spike").exists()
     assert runner.invoke(app, ["nuke", "bogus", "-y"]).exit_code != 0
+
+
+def test_minibank_makes_a_fresh_demo_repo(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCH_DATA_DIR", str(tmp_path / "data"))
+    r = runner.invoke(app, ["minibank"])
+    repo = tmp_path / "data" / "repos" / "minibank"
+    assert r.exit_code == 0 and f"--repo {repo}" in r.output, r.output
+    assert (repo / "minibank" / "payments" / "cards.py").exists()
+    assert not (repo / ".ruff_cache").exists() and not (repo / "__pycache__").exists()
+    log = subprocess.run(
+        ["git", "log", "--oneline", "main"], cwd=repo, capture_output=True, text=True
+    ).stdout
+    assert log.count("\n") == 1 and "Initial import" in log
+    again = runner.invoke(app, ["minibank", str(repo)])
+    assert again.exit_code != 0 and "not empty" in again.output

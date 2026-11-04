@@ -79,11 +79,19 @@ class Runs:
     def start(self, root_id: str, options: RunOptions | None = None) -> RunInfo:
         os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
         from orch.runtime.model import DEFAULT_MODEL, PRICES, meta_model
-        from orch.runtime.runner import Runner
-        from orch.runtime.scripted import scripted_team
+        from orch.runtime.runner import Runner, last_run
+        from orch.runtime.scripted import SCRIPTED_MODEL, scripted_team
         from orch.runtime.workspace import Workspace
 
         prev = self.runs.get(root_id)
+        if options is None and prev is None and (before := last_run(self.orch, root_id)):
+            # The UI restarted since it last ran: carry on as it started.
+            offline = before["model"] == SCRIPTED_MODEL
+            options = RunOptions(
+                model="" if offline else before["model"],
+                parallel=before.get("parallel", 3),
+                offline=offline,
+            )
         opts = options or (prev.options if prev else RunOptions())
         opts.model = opts.model or DEFAULT_MODEL
         if opts.model not in PRICES:
@@ -187,6 +195,9 @@ def pick_folder() -> str | None:
         _picking.release()
     path = p.stdout.strip()  # cancelling exits non-zero (macOS) or prints nothing (Windows)
     return str(Path(path)) if p.returncode == 0 and path else None
+
+
+STARTERS = ("empty", "minibank")
 
 
 def write_empty_repo(repo: Path, name: str) -> None:
@@ -299,7 +310,7 @@ def chat_messages(orch: TaskOrchestrator, runs: Runs, pid: str) -> dict[str, Any
     """
     objectives = {o["id"]: o for o in orch.objectives(pid)}
     tasks = {t["id"]: t for root in objectives for t in orch.task_tree(root)}
-    open_reqs = {r["id"]: r for r in orch.open_human_requests(pid)}
+    open_reqs = {r["id"]: {**r, "criteria": _is_criteria(r)} for r in orch.open_human_requests(pid)}
     out: list[dict[str, Any]] = []
     # Each objective's plan message carries live steps; their updates fold in under them.
     plan_msgs: dict[str, dict[str, Any]] = {}
@@ -338,12 +349,18 @@ def chat_messages(orch: TaskOrchestrator, runs: Runs, pid: str) -> dict[str, Any
             out.append(_msg(e, "pm", p["text"], root_id=p.get("objective_id")))
         elif kind == "human.requested":
             rid = p["request_id"]
-            req = {"id": rid, "kind": p["kind"], "options": p["options"], "open": rid in open_reqs}
+            req = {
+                "id": rid,
+                "kind": p["kind"],
+                "options": p["options"],
+                "open": rid in open_reqs,
+                "criteria": _is_criteria(p),
+            }
             out.append(_msg(e, "pm", p["prompt"], root_id=root, request=req))
             if p["kind"] == "approval":
                 asked[rid] = "approval"
                 mark(root, e, "FinOrch asked you to approve the change for merge", "human")
-            elif p["prompt"].startswith("AC-1"):
+            elif req["criteria"]:
                 asked[rid] = "criteria"
                 mark(root, e, "the PM sent you the acceptance criteria to approve", "human")
             else:
@@ -513,6 +530,11 @@ def _track(d: dict[str, Any], p: dict[str, Any], ts: str) -> None:
         d["ended"] = d["ended"] if p["from"] == "WAITING" else ts  # root: planning time only
     elif to in ("READY", "RUNNING"):
         d["ended"] = None
+
+
+def _is_criteria(req: dict[str, Any]) -> bool:
+    """The PM's acceptance criteria sent for approval: an open question listing AC-1, AC-2..."""
+    return req["kind"] != "approval" and not req["options"] and req["prompt"].startswith("AC-1")
 
 
 def _answer_line(asked: str, response: str) -> str:
@@ -702,7 +724,7 @@ def create_app(
         return [project_view(pid) for pid in reversed(orch.project_ids())]
 
     async def create_project(req: Request) -> dict[str, Any]:
-        from orch.runtime.workspace import GitError, Workspace
+        from orch.runtime.workspace import GitError, Workspace, make_minibank
 
         body = await req.json()
         name = (body.get("name") or "").strip()
@@ -713,9 +735,16 @@ def create_app(
         budget = float(body.get("budget") or default_budget)
         if orch.project_for_repo(str(repo)):
             raise ApiError(f"{repo} already has a project; pick another repo path", 409)
+        starter = body.get("starter") or "empty"
+        if starter not in STARTERS:
+            raise ApiError(f"starter must be one of {list(STARTERS)}")
         check_repo_path(repo)
         try:
-            if not (repo / ".git").exists():
+            if (repo / ".git").exists():
+                pass  # an existing repo is used as it is
+            elif starter == "minibank":
+                make_minibank(repo)
+            else:
                 write_empty_repo(repo, name)
             Workspace.create(repo, data_dir() / "worktrees")
         except (GitError, OSError) as e:
@@ -812,7 +841,7 @@ def create_app(
         if opts.offline and not (Path(repo_path or "") / "minibank").is_dir():
             raise ApiError(
                 "the offline scripted team only builds its transfers demo, which needs a "
-                "minibank repo; make a project whose repo folder is a copy of minibank"
+                "minibank repo; make a new project that starts as the minibank sample"
             )
         if opts.offline and not objective:
             objective, criteria = (

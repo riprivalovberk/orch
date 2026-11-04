@@ -210,12 +210,15 @@ const views = {
   async new() {
     return `<h2>New project</h2><p class="muted">A project is one target git repo, the agent team and a shared budget.
       Leave the repo empty to make a new folder in <span class="mono">${esc(O.data_dir)}/repos/&lt;name&gt;</span>;
-      a new or empty folder starts as an empty Python project (pyproject, README, tests/).</p>
+      a new or empty folder starts as the project you pick below.</p>
       <div class="card" style="max-width:640px">
         <label>Name</label><input id="pName" placeholder="payments-api">
         <label>Target repo folder (optional): an existing git repo, or a new or empty folder</label>
         <div class="row" style="flex-wrap:nowrap"><input id="pRepo" placeholder="~/code/my-service — leave empty for a new repo under the data folder">
           <button id="pBrowse" onclick="pickFolder()" style="white-space:nowrap">Browse…</button></div>
+        <label>A new repo starts as</label><select id="pStarter">
+          <option value="empty" selected>Empty Python project (pyproject, README, tests/)</option>
+          <option value="minibank">minibank sample bank app (needed for the offline demo)</option></select>
         <label>Budget (USD, shared by all objectives)</label><input id="pBudget" type="number" step="0.5" value="${O.default_budget}">
         <div class="row" style="margin-top:12px"><button class="primary" onclick="createProject()">Create project</button></div>
       </div>`;
@@ -317,9 +320,9 @@ function chatHtml(p) {
             <details class="opts" style="margin-left:auto"><summary>Run settings</summary>
               <div class="grid2">
                 <div><label>Model</label><select id="oModel">${O.models.map(m => `<option ${m === O.default_model ? "selected" : ""}>${m}</option>`).join("")}</select></div>
-                <div><label>Agents at once</label><input id="oPar" type="number" min="1" value="3"></div>
-                <div><label>&nbsp;</label><label style="display:flex;gap:6px;align-items:center;color:var(--ink)">
-                  <input id="oOff" type="checkbox" style="width:auto"> Offline scripted demo (no chat, the message is the objective)</label></div>
+                <div><label title="The most agents working at once. Steps only run together when the plan allows it, so fewer may run.">Agents Running Parallel Cap</label><input id="oPar" type="number" min="1" value="3"></div>
+                <div><label>&nbsp;</label><label title="A scripted team instead of the model: no key, no cost. It only builds the minibank transfers change (projects started as the minibank sample), and your message just starts it." style="display:flex;gap:6px;align-items:center;color:var(--ink)">
+                  <input id="oOff" type="checkbox" style="width:auto"> Offline scripted demo</label></div>
               </div></details></div>
         </div>
       </div>
@@ -373,10 +376,13 @@ function msgHtml(m, objectives) {
   let acts = "";
   if (req && req.open && req.options.length)
     acts = `<div class="acts">${req.options.map(o => `<button class="${["approve", "override_approve"].includes(o) ? "primary" : ""}" onclick="answer('${req.id}', ${esc(JSON.stringify(o))})">${esc(OPTION_LABELS[o] || o)}</button>`).join("")}</div>`;
+  else if (req && req.open && req.criteria)
+    acts = `<div class="acts" style="align-items:center"><button class="primary" onclick="answer('${req.id}', 'approve')">Approve criteria</button>
+      <span class="muted" style="font-size:12px">or reply below with what to change</span></div>`;
   else if (req && req.open) acts = `<div class="acts muted" style="font-size:12px">Reply below.</div>`;
   const cls = `msg ${m.role}${req && req.open ? " ask" : ""}`;
   const wf = m.steps ? stepsHtml(m.steps, m.timeline || [], m.root_id || "") : "";
-  let html = `<div class="${cls}"><div class="who">${who}${req ? " · " + esc(req.kind) : ""}</div><div class="bubble">${esc(m.text)}${extra}</div>${wf}${acts}</div>`;
+  let html = `<div class="${cls}"><div class="who">${who}${req ? " · " + (req.criteria ? "acceptance criteria" : esc(req.kind)) : ""}</div><div class="bubble">${esc(m.text)}${extra}</div>${wf}${acts}</div>`;
   if (m.starts_objective) {
     const o = objectives.find(x => x.id === m.root_id);
     html = `<div class="divider">New objective · ${o ? st(o.status) : ""} <a href="#/objective/${m.root_id}">tasks and evidence</a></div>` + html;
@@ -476,7 +482,9 @@ async function loadChat(pid) {
   const open = data.open_requests, q = open.find(r => !r.options.length);
   const thinking = data.working.some(w => w.startsWith("the PM is writing"));
   if (!q) askInstead = false;
-  chatMode = q && !askInstead ? {kind: "answer", id: q.id, text: "Your message answers the PM's question above."}
+  chatMode = q && !askInstead ? {kind: "answer", id: q.id, text: q.criteria
+      ? "Approve the criteria above, or reply with what to change."
+      : "Your message answers the PM's question above."}
     : {kind: "chat", text: askInstead ? "Your message is a new question for the PM, not an answer."
         : open.length ? "A decision is waiting above: click it, or reply \"approve\" or \"reject\". You can still ask the PM anything."
         : data.running.length ? "The team is working. Ask the PM anything; you'll be asked here when they need you."
@@ -574,7 +582,7 @@ async function pickFolder() {
 }
 
 async function createProject() {
-  const r = await act(() => api("/projects", {name: $("#pName").value, repo: $("#pRepo").value, budget: $("#pBudget").value}), "Project created");
+  const r = await act(() => api("/projects", {name: $("#pName").value, repo: $("#pRepo").value, starter: $("#pStarter").value, budget: $("#pBudget").value}), "Project created");
   if (r) go(`#/project/${r.id}`);
 }
 async function loadFiles(pid) {

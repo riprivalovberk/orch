@@ -16,9 +16,9 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.usage import RunUsage
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Contributor mode is its own model id: cheaper, but Meta may train on prompts and outputs.
-# Use "muse-spark-1.3" (standard) for anything a bank would actually send.
-DEFAULT_MODEL = "muse-spark-1.3-contributor"
+# The standard model is the default. Contributor mode is its own model id: cheaper, but Meta
+# may train on prompts and outputs, so pick it only for work nobody minds sharing.
+DEFAULT_MODEL = "muse-spark-1.3"
 Api = Literal["chat", "responses"]
 
 

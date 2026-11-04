@@ -12,18 +12,25 @@ from orch.domain.schemas import Plan
 from orch.runtime.envs import SHARED
 
 ROOT = Path(__file__).resolve().parents[1]
-# The sample bank app the scripted team builds on. Its own repo lives outside orch; this copy
-# is a fixture, and its tests are not orch's.
-MINIBANK = ROOT / "tests" / "fixtures" / "minibank"
-collect_ignore = ["fixtures"]
 
 
 def minibank_repo(path: Path) -> Path:
-    """A fresh git repo (main, one commit) holding the minibank fixture."""
-    from orch.runtime.workspace import Workspace
+    """A fresh git repo (main, one commit) holding the minibank sample app."""
+    from orch.runtime.workspace import make_minibank
 
-    Workspace.create(path, path.parent / f"{path.name}-wt", template=MINIBANK)
-    return path
+    return make_minibank(path)
+
+
+@pytest.fixture(autouse=True)
+def no_model_key(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Offline tests see no MODEL_API_KEY, from the environment or a local .env: they must pass
+    on a fresh clone, so nothing may quietly reach for the real model."""
+    if request.node.get_closest_marker("live"):
+        return
+    from orch.runtime.model import ModelEnv
+
+    monkeypatch.delenv("MODEL_API_KEY", raising=False)
+    monkeypatch.setitem(ModelEnv.model_config, "env_file", None)
 
 
 @pytest.fixture(autouse=True)

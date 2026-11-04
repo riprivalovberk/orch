@@ -24,8 +24,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import yaml
-from pydantic import ValidationError
 from starlette.applications import Starlette
 from starlette.datastructures import UploadFile
 from starlette.requests import Request
@@ -33,14 +31,12 @@ from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route
 
 from orch.core.orchestrator import OrchestratorError, TaskOrchestrator
-from orch.core.plan import PlanValidator, ValidationContext
 from orch.core.team import TeamRegistry
-from orch.domain.schemas import Plan, ProjectLimits
+from orch.domain.schemas import ProjectLimits
 from orch.ids import now_iso
 from orch.paths import data_dir
 
 INDEX = Path(__file__).with_name("index.html")
-EXAMPLES = Path(__file__).resolve().parents[3] / "examples"  # sample plans for Plan check
 log = logging.getLogger(__name__)
 
 
@@ -987,27 +983,6 @@ def create_app(
         reason = body.get("reason") or "canceled from the web UI"
         return {"status": orch.cancel(req.path_params["tid"], reason)}
 
-    async def plan_check(req: Request) -> dict[str, Any]:
-        body = await req.json()
-        try:
-            spec = Plan.model_validate(yaml.safe_load(body["plan"]))
-        except (yaml.YAMLError, ValidationError) as e:
-            raise ApiError(f"not a plan: {e}") from e
-        ctx = ValidationContext.from_team(team())
-        errors = PlanValidator.for_pack(body.get("pack") or "fintech_sdlc").validate(spec, ctx)
-        return {
-            "ok": not errors,
-            "nodes": len(spec.nodes),
-            "edges": len(spec.edges),
-            "errors": [
-                {"text": str(e), "code": e.code, "hint": e.hint, "escalate": e.escalate}
-                for e in errors
-            ],
-        }
-
-    async def examples(_: Request) -> dict[str, str]:
-        return {p.name: p.read_text() for p in sorted(EXAMPLES.glob("plan_*.yaml"))}
-
     async def nuke(req: Request) -> dict[str, Any]:
         """Spike results or target repos. The db stays: this process holds it open."""
         section = (await req.json()).get("section")
@@ -1100,8 +1075,6 @@ def create_app(
         Route("/api/tasks/{tid}/cancel", api(cancel), methods=["POST"]),
         Route("/api/events", api(events)),
         Route("/api/requests/{rid}/answer", api(answer), methods=["POST"]),
-        Route("/api/plan-check", api(plan_check), methods=["POST"]),
-        Route("/api/examples", api(examples)),
         Route("/api/nuke", api(nuke), methods=["POST"]),
         Route("/api/settings", api(get_settings)),
         Route("/api/settings/api-key", api(set_api_key), methods=["POST"]),

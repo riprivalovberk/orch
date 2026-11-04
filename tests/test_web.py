@@ -119,15 +119,6 @@ def test_live_objective_without_a_key_is_refused(client: TestClient, monkeypatch
     assert r.status_code == 400 and "MODEL_API_KEY" in r.json()["error"]
 
 
-def test_plan_check(client: TestClient):
-    ex = client.get("/api/examples").json()
-    good = client.post("/api/plan-check", json={"plan": ex["plan_transfers.yaml"]}).json()
-    assert good["ok"] and good["nodes"]
-    bad = client.post("/api/plan-check", json={"plan": ex["plan_bad.yaml"]}).json()
-    assert not bad["ok"] and any(e["code"] == "PAY-001" for e in bad["errors"])
-    assert client.post("/api/plan-check", json={"plan": "nodes: 3"}).status_code == 400
-
-
 def test_bad_repo_paths_get_a_clear_error(client: TestClient, tmp_path: Path):
     def create(repo: str) -> dict:
         r = client.post("/api/projects", json={"name": "x", "repo": repo})

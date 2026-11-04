@@ -139,9 +139,7 @@ section#view.chat-mode { padding: 0; display: flex; flex-direction: column; heig
   <h1>orch</h1>
   <nav id="nav">
     <a href="#/" data-v="projects">Projects</a>
-    <a href="#/events" data-v="events">Events</a>
     <a href="#/team" data-v="team">Team</a>
-    <a href="#/plan" data-v="plan">Plan check</a>
     <a href="#/admin" data-v="admin">Admin</a>
   </nav>
   <div id="status"></div>
@@ -263,30 +261,11 @@ const views = {
       <h3>Events</h3><div class="card" style="padding:4px"><div class="events" id="objEvents"></div></div>`;
   },
 
-  async events(q) {
-    const params = new URLSearchParams(q || "");
-    return `<h2>Events</h2><div class="card row">
-        <select id="fProject" style="width:auto"><option value="">all projects</option>${P.map(p => `<option value="${p.id}" ${params.get("project") === p.id ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select>
-        <input id="fText" placeholder="filter: type, actor, node, text…" style="max-width:320px" value="${esc(params.get("q") || "")}">
-        <label style="display:flex;gap:6px;align-items:center;margin:0"><input id="fFollow" type="checkbox" style="width:auto" checked> follow</label>
-        <span class="muted" id="evCount"></span></div>
-      <div class="card" style="padding:4px"><div class="events" id="allEvents" style="max-height:calc(100vh - 220px)"></div></div>`;
-  },
-
   async team() {
     return `<h2>Team</h2><p class="muted mono">${esc(O.team.path)} · PM: ${esc(O.team.pm)}</p>
       ${O.team.agents.map(a => `<div class="card"><strong>${esc(a.name)}</strong> ${a.name === O.team.pm ? st("PM") : ""}
         <div>${a.capabilities.map(c => `<span class="chip">${esc(c)}</span>`).join(" ")}</div>
         <div class="muted" style="margin-top:6px">${esc(a.description)}</div></div>`).join("")}`;
-  },
-
-  async plan() {
-    const ex = await api("/examples");
-    return `<h2>Plan check</h2><p class="muted">Validate a plan (YAML or JSON) against the structural rules and the fintech_sdlc policy pack.</p>
-      <div class="card"><div class="row">Load example: ${Object.keys(ex).map(n => `<button onclick='$("#planText").value = ${esc(JSON.stringify(ex[n]))}'>${esc(n)}</button>`).join("")}</div>
-      <textarea id="planText" rows="18" style="margin-top:10px"></textarea>
-      <div class="row" style="margin-top:10px"><button class="primary" onclick="checkPlan()">Check plan</button></div>
-      <div id="planOut"></div></div>`;
   },
 
   async admin() {
@@ -360,8 +339,7 @@ function detailsHtml(p) {
   return `<a href="#/project/${pid}" class="muted">← back to the chat</a>
     <div class="row" style="justify-content:space-between;margin-top:6px">
       <div><h2>${esc(p.name)}: project details</h2><div class="muted mono">${esc(p.id)} · ${esc(p.repo_path)} · ${esc(p.policy_pack)}</div></div>
-      <div class="row"><button onclick="verifyChain('${pid}')">Verify event chain</button>
-      <a class="btn" href="#/events?project=${pid}" style="text-decoration:none">Events</a></div></div>
+      <div class="row"><button onclick="verifyChain('${pid}')">Verify event chain</button></div></div>
     <div class="card row" style="margin-top:14px">
       <span>Spent <strong id="spent">${money(p.spent_usd)}</strong> of <strong>$${p.budget_usd.toFixed(2)}</strong></span>
       <input id="budget" type="number" step="0.5" style="width:110px" value="${p.budget_usd}">
@@ -671,13 +649,6 @@ async function showTask(tid) {
       ${t.diff ? `<h3>Diff</h3><pre class="box">${esc(t.diff)}</pre>` : ""}`);
   } catch (e) { toast("Error: " + e.message); }
 }
-async function checkPlan() {
-  try { const r = await api("/plan-check", {plan: $("#planText").value});
-    $("#planOut").innerHTML = r.ok ? `<p class="s-DONE">Plan cleared: ${r.nodes} nodes, ${r.edges} edges</p>`
-      : `<p class="s-FAILED">Plan rejected: ${r.errors.length} error(s)</p>` + r.errors.map(e =>
-        `<div class="mono">${esc(e.text)}${e.escalate ? ` <span class="s-WAITING_HUMAN">[needs a human]</span>` : ""}${e.hint ? `<div class="muted">  hint: ${esc(e.hint)}</div>` : ""}</div>`).join("");
-  } catch (e) { $("#planOut").innerHTML = `<p class="err">${esc(e.message)}</p>`; }
-}
 async function saveKey() {
   const key = $("#apiKey").value.trim();
   if (!key) return toast("Paste the key first");
@@ -709,21 +680,7 @@ async function render() {
   const typing = document.activeElement && ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName);
   try {
     await refreshChrome();
-    if (name === "events") {
-      if (fresh) {
-        $("#view").innerHTML = await views.events(query);
-        const reload = () => { const p = $("#fProject").value; history.replaceState(null, "", `#/events${p ? "?project=" + p : ""}`); lastRoute = location.hash; pollEvents("allEvents", p ? "project=" + p : "", true); };
-        $("#fProject").onchange = reload;
-        $("#fText").oninput = () => { const box = $("#allEvents"); const f = $("#fText").value.toLowerCase();
-          const shown = f ? evRows.filter(e => JSON.stringify(e).toLowerCase().includes(f)) : evRows;
-          box.innerHTML = shown.map(evRow).join(""); $("#evCount").textContent = `${shown.length} of ${evRows.length}`; };
-        await pollEvents("allEvents", new URLSearchParams(query || "").get("project") ? "project=" + new URLSearchParams(query).get("project") : "", true);
-      } else {
-        await pollEvents("allEvents", $("#fProject").value ? "project=" + $("#fProject").value : "", false);
-      }
-      return;
-    }
-    if (!fresh && !isChat && (typing || ["new", "plan", "admin", "team"].includes(name))) return;
+    if (!fresh && !isChat && (typing || ["new", "admin", "team"].includes(name))) return;
     if (!fresh && isChat) return loadChat(arg);  // keep the composer; refresh the thread
     if (!fresh && name === "project") {  // details: keep the budget field; refresh the list
       const p = P.find(x => x.id === arg);

@@ -156,12 +156,14 @@ def run(
 ) -> None:
     """Run an objective end to end: plan, build in parallel, verify, approve, merge."""
     os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
-    from orch.runtime.model import DEFAULT_MODEL, PRICES, meta_model
+    from orch.runtime.model import DATA_WARNING, DEFAULT_MODEL, PRICES, TRAINS_ON_DATA, meta_model
     from orch.runtime.runner import Runner
     from orch.runtime.scripted import TRANSFERS_CRITERIA, TRANSFERS_OBJECTIVE, scripted_team
     from orch.runtime.workspace import GitError, Workspace
 
     model_name = model_name or DEFAULT_MODEL
+    if model_name in TRAINS_ON_DATA and not offline:
+        typer.secho(f"warning: {DATA_WARNING}", fg="yellow", err=True)
     if model_name not in PRICES:
         raise typer.BadParameter(f"no price for {model_name}; add it to model.PRICES")
     orch = _orch()
@@ -296,15 +298,20 @@ def evidence_markdown(ev: dict[str, Any], chain_ok: bool, events: int) -> str:
             f"| {t['node']} | {t['kind']} | {t['assignee'] or '-'} | {t['status']} "
             f"| {t['outcome'] or '-'} | {t['revision_round']} |"
         )
-    lines += ["", "## Gates", "", "| target | round | gate | passed |", "|---|---|---|---|"]
+    lines += ["", "## Gates", "", "| target | round | gate | passed | time | output sha256 |"]
+    lines.append("|---|---|---|---|---|---|")
     lines += [
-        f"| {g['target']} | {g['round']} | {g['gate']} | {g['passed']} |" for g in ev["gates"]
+        f"| {g['target']} | {g['round']} | {g['gate']} | {g['passed']} "
+        f"| {g['duration_ms'] / 1000:.1f}s | `{g['output_sha256'][:12]}` |"
+        for g in ev["gates"]
     ]
     lines += ["", "## Reviews", ""]
     for r in ev["reviews"]:
         lines.append(f"- {r['target']} round {r['round']}: **{r['verdict']}** by {r['reviewer']}")
-        if r["summary"]:
-            lines.append(f"  - {r['summary']}")
+        first, *checked = (r["summary"] or "").splitlines()
+        if first:
+            lines.append(f"  - {first}")
+        lines += [f"    {c}" for c in checked]  # "- AC-1: file:line; test", nested
         for f in r["findings"]:
             cite = f" ({f['criterion_id']})" if f.get("criterion_id") else ""
             lines.append(f"  - [{f['severity']}] {f['issue']}{cite}")

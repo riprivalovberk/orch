@@ -7,6 +7,7 @@ The test engineer and developer write working code, so the gates run for real.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -165,6 +166,33 @@ def _call(name: str, args: dict[str, Any]) -> ModelResponse:
     return ModelResponse([ToolCallPart(name, args)])
 
 
+# What the scripted reviewer cites for each criterion: the line of code that meets it and
+# the tests whose names start with the prefix.
+_PROOF = {
+    "AC-1": ("if key in self._done:", "test_ac1_"),
+    "AC-2": ("amount = Decimal(raw)", "test_ac2_"),
+    "AC-3": ("except InsufficientFunds:", "test_ac3_"),
+    "AC-4": ('log.info("moved', "test_ac4_"),
+}
+
+
+def review_checks() -> list[dict[str, str]]:
+    """Per criterion: file:line of the code, what it does, and the exact tests (file::name)."""
+    code = TRANSFERS.splitlines()
+    tests = re.findall(r"^def (test_\w+)", TESTS, re.M)
+    out = []
+    for ac, (needle, prefix) in _PROOF.items():
+        line = next(i for i, text in enumerate(code, 1) if needle in text)
+        proof = ", ".join(f"tests/test_transfers.py::{t}" for t in tests if t.startswith(prefix))
+        out.append(
+            {
+                "criterion_id": ac,
+                "evidence": f"minibank/api/transfers.py:{line} `{code[line - 1].strip()}`; {proof}",
+            }
+        )
+    return out
+
+
 def scripted_team() -> FunctionModel:
     plan = yaml.safe_load((ROOT / "examples" / "plan_transfers.yaml").read_text())
     plan["objective"] = TRANSFERS_OBJECTIVE
@@ -184,11 +212,9 @@ def scripted_team() -> FunctionModel:
                 "submit_review",
                 {
                     "verdict": "approve",
-                    "summary": "Every criterion is met and tested.",
-                    "checks": [
-                        {"criterion_id": ac, "evidence": "minibank/api/transfers.py; tests"}
-                        for ac in TRANSFERS_CRITERIA
-                    ],
+                    "summary": "Read the diff and the tests; each criterion below is met in "
+                    "the code and covered by a named test.",
+                    "checks": review_checks(),
                 },
             )
         steps: list[tuple[str, dict[str, Any]]]

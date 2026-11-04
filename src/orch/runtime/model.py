@@ -16,9 +16,15 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.usage import RunUsage
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Contributor mode is its own model id: cheaper, but Meta may train on prompts and outputs.
-# Use "muse-spark-1.3" (standard) for anything a bank would actually send.
-DEFAULT_MODEL = "muse-spark-1.3-contributor"
+# Standard by default: agents send the repo's code to the model. Contributor mode is its own
+# model id, much cheaper, but Meta may train on its prompts and outputs, so it is opt-in only
+# (pick it per run) and meant for sample code, never a bank's real repos.
+DEFAULT_MODEL = "muse-spark-1.3"
+TRAINS_ON_DATA = frozenset({"muse-spark-1.3-contributor"})
+DATA_WARNING = (
+    "Contributor mode: Meta may train on the prompts and outputs, which include this repo's "
+    "code. Use it only for sample or demo code, never for a bank's real repos."
+)
 Api = Literal["chat", "responses"]
 
 

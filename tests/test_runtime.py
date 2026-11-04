@@ -299,6 +299,7 @@ def test_failing_gate_sends_work_back(orch: TaskOrchestrator, team: TeamRegistry
 
 def test_cli_offline_run_approve_resume_evidence(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("ORCH_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("MODEL_API_KEY", "test")  # resume builds a model; none is called
     cli = CliRunner()
     repo = str(minibank_repo(tmp_path / "bank"))
     r = cli.invoke(app, ["run", "--offline", "--no-interactive", "--repo", repo])
@@ -314,6 +315,9 @@ def test_cli_offline_run_approve_resume_evidence(tmp_path: Path, monkeypatch):
     assert r.exit_code == 0
     md = (tmp_path / "data" / "evidence" / f"{root}.md").read_text()
     assert "hash chain **intact**" in md and "| implement_transfer | 0 | pytest | True |" in md
+    # reviews cite the line of code and the exact tests for each criterion
+    assert "- AC-1: minibank/api/transfers.py:23 `if key in self._done:`; " in md
+    assert "tests/test_transfers.py::test_ac1_repeated_key_posts_once" in md
 
 
 def test_edit_file_replaces_one_exact_match_within_scope(
@@ -468,6 +472,7 @@ def test_submit_artifact_stores_by_hash_and_shows_in_evidence(
 
 def test_cli_resume_uses_the_objectives_repo_and_budget_updates(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("ORCH_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("MODEL_API_KEY", "test")  # resume builds a model; none is called
     cli = CliRunner()
     assert "give --repo" in cli.invoke(app, ["run", "--offline"]).output
     repo = minibank_repo(tmp_path / "bank")

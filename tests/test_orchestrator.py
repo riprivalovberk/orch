@@ -353,8 +353,11 @@ def test_spec_gaps_need_an_assumption_and_reach_the_approval(orch, team, good_pl
     orch.record_review(review, APPROVE.model_copy(update={"findings": [minor]}))
     [req] = orch.open_human_requests(pid)
     assert req["kind"] == "approval"
-    assert "Nothing covers a missing column. Assumed: it returns HTTP 400" in req["prompt"]
-    assert "Assumed: each blank-id row stands alone" in req["prompt"]
+    assert (
+        "- it returns HTTP 400 naming the column (raised in review: Nothing covers"
+        in (req["prompt"])
+    )
+    assert "- each blank-id row stands alone (raised in review:" in req["prompt"]
 
 
 def test_canceling_an_objective_cancels_its_tasks(orch, team, good_plan):

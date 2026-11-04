@@ -73,14 +73,14 @@ def test_offline_objective_runs_through_approval_to_main(client: TestClient, tmp
         "open": True,
     }
     assert chat["open_requests"][0]["id"] == req["id"] and chat["running"] == []
-    assert [x["id"] for x in c.get("/api/inbox").json()] == [req["id"]]
+    assert c.get("/api/inbox").status_code == 404  # no inbox: decisions are answered in the chat
 
     a = c.post(f"/api/requests/{req['id']}/answer", json={"response": "approve"}).json()
     assert a["resumed"]
     ob = wait_for_run(c, r["root_id"])
     assert ob["root"]["status"] == "DONE", ob["run"]
     assert ob["run"]["report"]["merged_into_main"]
-    assert c.get("/api/inbox").json() == []
+    assert c.get(f"/api/projects/{p['id']}/chat").json()["open_requests"] == []
     chat = c.get(f"/api/projects/{p['id']}/chat").json()["messages"]
     assert not chat[-1]["text"].startswith("I had to stop")
     # the plan message is a live workflow: planning, then every planned task, all timed
@@ -379,6 +379,23 @@ def test_api_key_is_saved_to_env_and_never_shown(tmp_path: Path, monkeypatch):
     assert bad.status_code == 400
     gone = c.post("/api/settings/api-key", json={"remove": True}).json()["api_key"]
     assert not gone["set"] and env.read_text() == "OTHER=1\n"
+
+
+def test_rejecting_the_change_says_what_to_do_next(client: TestClient, tmp_path: Path):
+    c = client
+    p = c.post("/api/projects", json={"name": "Rej", "starter": "minibank"}).json()
+    r = c.post(f"/api/projects/{p['id']}/objectives", json={"offline": True}).json()
+    [req] = wait_for_run(c, r["root_id"])["requests"]
+    c.post(f"/api/requests/{req['id']}/answer", json={"response": "reject"})
+    wait_for_run(c, r["root_id"])
+    chat = c.get(f"/api/projects/{p['id']}/chat").json()["messages"]
+    assert chat[-1]["text"].startswith("You rejected the change, so nothing was merged")
+    tl = next(m for m in chat if m.get("steps"))["timeline"]
+    assert "you rejected the change for merge" in [x["text"] for x in tl]
+    head = subprocess.run(
+        ["git", "log", "--oneline"], cwd=p["repo_path"], capture_output=True, text=True
+    ).stdout
+    assert "Merge obj/" not in head  # main untouched
 
 
 def test_step_time_counts_only_working_time():

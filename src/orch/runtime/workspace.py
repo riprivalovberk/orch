@@ -109,6 +109,21 @@ class Workspace:
                 git(self.repo, "worktree", "add", "-q", "-b", branch, str(d), "main")
         return d
 
+    def catch_up(self, root_id: str) -> Merge | None:
+        """Bring main into the objective if main moved since it was built (another objective
+        merged first). None when main has not moved; on a conflict the branch is left as is."""
+        d = self.start_objective(root_id)
+        if git(d, "merge-base", "--is-ancestor", "main", "HEAD", check=False).returncode == 0:
+            return None
+        p = git(d, "merge", "--no-edit", "-q", "main", check=False)
+        if p.returncode != 0:
+            git(d, "merge", "--abort", check=False)
+            return Merge(False, p.stdout + p.stderr)
+        return Merge(True, self.head(d))
+
+    def undo_catch_up(self, root_id: str) -> None:
+        git(self.objective_dir(root_id), "reset", "--hard", "-q", "ORIG_HEAD")
+
     def finish_objective(self, root_id: str) -> Merge:
         """Approved: merge the objective into main (the repo's own checkout)."""
         branch = self.objective_branch(root_id)

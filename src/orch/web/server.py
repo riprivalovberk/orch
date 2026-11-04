@@ -1,4 +1,4 @@
-"""Web UI: projects, objectives, live events, the human inbox and evidence, on one page.
+"""Web UI: projects, objectives, live events, the PM chat and evidence, on one page.
 
     uv run orch ui            # http://127.0.0.1:8765
 
@@ -324,6 +324,7 @@ def chat_messages(orch: TaskOrchestrator, runs: Runs, pid: str) -> dict[str, Any
 
     asked: dict[str, str] = {}  # request id -> what was asked: "criteria", "approval" or "question"
     drafts: dict[str, int] = {}  # objective -> plan drafts the PM has checked so far
+    rejected: set[str] = set()  # objectives whose change the person rejected at approval
     events = orch.list_events(project_id=pid, limit=20_000)
     from_chat = {e["payload"].get("objective_id") for e in events if e["type"] == "chat.reply"} - {
         None
@@ -360,6 +361,8 @@ def chat_messages(orch: TaskOrchestrator, runs: Runs, pid: str) -> dict[str, Any
         elif kind == "human.responded":
             out.append(_msg(e, "user", p["response"], root_id=root))
             mark(root, e, _answer_line(asked.get(p["request_id"], ""), p["response"]), "human")
+            if asked.get(p["request_id"]) == "approval" and p["response"] == "reject" and root:
+                rejected.add(root)
         elif kind == "plan.checked":
             n = drafts[root or ""] = drafts.get(root or "", 0) + 1
             if not p["valid"]:
@@ -394,6 +397,11 @@ def chat_messages(orch: TaskOrchestrator, runs: Runs, pid: str) -> dict[str, Any
         elif kind == "task.status" and t:
             _track(timing.setdefault(tid, {"started": None, "ended": None}), p, e["ts"])
             line = _status_line(t, p, tid in objectives)
+            if tid in rejected and p["to"] == "FAILED":
+                line = (
+                    "You rejected the change, so nothing was merged into main. Tell me what to "
+                    "change and the team will start again."
+                )
             if p.get("reason") == "changes requested":  # a handoff back to the agent
                 by = [tasks[v]["assignee"] for v in p.get("failed_verifiers", []) if v in tasks]
                 mark(
@@ -423,6 +431,15 @@ def chat_messages(orch: TaskOrchestrator, runs: Runs, pid: str) -> dict[str, Any
             mark(root, e, "merged into main", "done")
         elif kind == "workspace.merge_conflict":
             out.append(_msg(e, "activity", f"merge conflict on {p['branch']}", root_id=root))
+            mark(root, e, f"merge conflict on {p['branch']}", "fail")
+        elif kind == "workspace.merge_blocked":
+            text = (
+                "Not merged: main changed since this was built, and with those changes the "
+                "tests fail. main is unchanged. Ask me to make the change again and the team "
+                "will build it on the current main."
+            )
+            out.append(_msg(e, "pm", text, root_id=root))
+            mark(root, e, "not merged: the tests fail together with the latest main", "fail")
         elif kind == "artifact.added" and t and tid not in objectives:
             logs.setdefault(tid, []).append({"ts": e["ts"], "text": f"attached {p['name']}"})
         elif kind == "artifact.added":
@@ -943,9 +960,6 @@ def create_app(
             limit=min(int(q.get("limit") or 500), 2000),
         )
 
-    async def get_inbox(_: Request) -> list[dict[str, Any]]:
-        return inbox()
-
     async def answer(req: Request) -> dict[str, Any]:
         body = await req.json()
         rid = req.path_params["rid"]
@@ -1095,7 +1109,6 @@ def create_app(
         Route("/api/tasks/{tid}", api(task)),
         Route("/api/tasks/{tid}/cancel", api(cancel), methods=["POST"]),
         Route("/api/events", api(events)),
-        Route("/api/inbox", api(get_inbox)),
         Route("/api/requests/{rid}/answer", api(answer), methods=["POST"]),
         Route("/api/plan-check", api(plan_check), methods=["POST"]),
         Route("/api/examples", api(examples)),

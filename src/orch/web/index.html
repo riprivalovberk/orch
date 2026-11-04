@@ -140,7 +140,6 @@ section#view.chat-mode { padding: 0; display: flex; flex-direction: column; heig
   <nav id="nav">
     <a href="#/" data-v="projects">Projects</a>
     <a href="#/events" data-v="events">Events</a>
-    <a href="#/inbox" data-v="inbox">Inbox<span class="n" id="inboxN" hidden></span></a>
     <a href="#/team" data-v="team">Team</a>
     <a href="#/plan" data-v="plan">Plan check</a>
     <a href="#/admin" data-v="admin">Admin</a>
@@ -187,8 +186,6 @@ function showDialog(html) { $("#dlgBody").innerHTML = html; dlg.showModal(); }
 
 async function refreshChrome() {
   [O, P] = await Promise.all([api("/overview"), api("/projects")]);
-  const inbox = await api("/inbox");
-  const n = $("#inboxN"); n.hidden = !inbox.length; n.textContent = inbox.length;
   $("#status").innerHTML =
     `<span class="chip ${O.api_key ? "s-true" : "s-WAITING_HUMAN"}">${O.api_key ? "API key set" : "no MODEL_API_KEY (offline only)"}</span>` +
     `<span class="chip ${O.running.length ? "s-running" : ""}">${O.running.length} running</span>`;
@@ -276,12 +273,6 @@ const views = {
         <label style="display:flex;gap:6px;align-items:center;margin:0"><input id="fFollow" type="checkbox" style="width:auto" checked> follow</label>
         <span class="muted" id="evCount"></span></div>
       <div class="card" style="padding:4px"><div class="events" id="allEvents" style="max-height:calc(100vh - 220px)"></div></div>`;
-  },
-
-  async inbox() {
-    const reqs = await api("/inbox");
-    return `<h2>Inbox</h2><p class="muted">Questions, approvals and escalations waiting on a person. Answering resumes the objective's run.</p>
-      ${reqs.length ? reqs.map(reqCard).join("") : `<p class="muted">Inbox empty.</p>`}`;
   },
 
   async team() {

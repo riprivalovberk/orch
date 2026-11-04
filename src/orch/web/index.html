@@ -680,7 +680,7 @@ async function render() {
   const typing = document.activeElement && ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName);
   try {
     await refreshChrome();
-    if (!fresh && !isChat && (typing || ["new", "admin", "team"].includes(name))) return;
+    if (!fresh && !isChat && (typing || ["", "new", "admin", "team"].includes(name))) return;
     if (!fresh && isChat) return loadChat(arg);  // keep the composer; refresh the thread
     if (!fresh && name === "project") {  // details: keep the budget field; refresh the list
       const p = P.find(x => x.id === arg);

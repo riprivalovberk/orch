@@ -209,7 +209,7 @@ def test_new_projects_start_empty(client: TestClient):
     files = [f["path"] for f in client.get(f"/api/projects/{p['id']}/files").json()]
     assert files == [".gitignore", "README.md", "pyproject.toml", "tests/__init__.py"]
     toml = (Path(p["repo_path"]) / "pyproject.toml").read_text()
-    assert 'name = "positions-rec"' in toml and 'known-first-party = ["minibank"]' in toml
+    assert 'name = "positions-rec"' in toml and 'known-first-party = ["positions_rec"]' in toml
     r = client.post(f"/api/projects/{p['id']}/objectives", json={"offline": True})
     assert r.status_code == 400 and "minibank" in r.json()["error"]
     bad = client.post("/api/projects", json={"name": "y", "starter": "django"})

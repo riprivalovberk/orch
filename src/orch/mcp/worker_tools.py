@@ -10,6 +10,7 @@ The docstrings are the tool descriptions agents see.
 
 from __future__ import annotations
 
+import difflib
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,9 +21,9 @@ from pydantic_ai import ModelRetry, RunContext
 from orch.core.orchestrator import OrchestratorError, TaskOrchestrator
 from orch.core.scope import is_safe_relative, task_can_write
 from orch.domain.enums import REVIEW_KINDS, TaskKind, Verdict
-from orch.domain.schemas import Finding, ReviewVerdict
-from orch.policies.fintech_sdlc import SENSITIVE_DIRS
-from orch.runtime import gates
+from orch.domain.schemas import Check, Finding, ReviewVerdict
+from orch.policies.fintech_sdlc import PROTECTED_DIRS
+from orch.runtime import envs, gates
 from orch.runtime.workspace import Workspace
 
 if TYPE_CHECKING:
@@ -147,18 +148,109 @@ def write_file(ctx: RunContext[WorkerDeps], path: str, content: str) -> dict[str
         path: repo-relative path
         content: the whole file
     """
-    d, c = ctx.deps, ctx.deps.caller
+    p = _writable(ctx.deps, path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(content)
+    return {"written": path, "bytes": len(content.encode())}
+
+
+def edit_file(
+    ctx: RunContext[WorkerDeps], path: str, old_text: str, new_text: str
+) -> dict[str, Any]:
+    """Change part of an existing file: replace old_text, which must occur once, with
+    new_text. Use it for fixes instead of rewriting the whole file with write_file.
+    Indentation and read_file's line numbers in old_text are forgiven: the lines are
+    matched by their content and new_text is re-indented to fit.
+
+    Args:
+        path: repo-relative path
+        old_text: the lines to replace, copied from the file, enough of them to be unique
+        new_text: what replaces it (empty deletes it)
+    """
+    p = _writable(ctx.deps, path)
+    if not p.is_file():
+        raise ModelRetry(f"{path} does not exist; create it with write_file")
+    text = p.read_text()
+    found = text.count(old_text) if old_text else 0
+    if found == 1:
+        p.write_text(text.replace(old_text, new_text))
+    elif found > 1:
+        raise ModelRetry(
+            f"old_text occurs {found} times in {path}; add surrounding lines to make it unique"
+        )
+    else:
+        p.write_text(_edit_by_lines(path, text, old_text, new_text))
+    return {"edited": path, "bytes": len(p.read_bytes())}
+
+
+LINE_NO = re.compile(r"^ *\d+  ")
+
+
+def _strip_line_numbers(lines: list[str]) -> list[str]:
+    """Drop read_file's "   12  " prefixes when every non-blank line has one."""
+    body = [ln for ln in lines if ln.strip()]
+    if body and all(LINE_NO.match(ln) for ln in body):
+        return [LINE_NO.sub("", ln) for ln in lines]
+    return lines
+
+
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def _edit_by_lines(path: str, text: str, old_text: str, new_text: str) -> str:
+    """Replace the one run of lines whose stripped content equals old_text's, re-indenting
+    new_text by the indentation difference. Raises ModelRetry naming the closest line."""
+    old = _strip_line_numbers(old_text.splitlines())
+    while old and not old[0].strip():
+        old.pop(0)
+    while old and not old[-1].strip():
+        old.pop()
+    if not old:
+        raise ModelRetry("old_text is empty; copy the lines to replace from read_file")
+    lines = text.splitlines(keepends=True)
+    want = [ln.strip() for ln in old]
+    n = len(want)
+    hits = [i for i in range(len(lines) - n + 1) if [x.strip() for x in lines[i : i + n]] == want]
+    if len(hits) != 1:
+        if hits:
+            raise ModelRetry(
+                f"old_text matches {len(hits)} places in {path} (lines "
+                f"{', '.join(str(i + 1) for i in hits)}); add surrounding lines to make it unique"
+            )
+        close = difflib.get_close_matches(want[0], [x.strip() for x in lines], n=1, cutoff=0.5)
+        hint = ""
+        if close:
+            i = [x.strip() for x in lines].index(close[0])
+            hint = f"; the closest line is {i + 1}: {lines[i].rstrip()!r}"
+        raise ModelRetry(f"old_text is not in {path}{hint}. Read the file again and retry.")
+    i = hits[0]
+    shift = _indent(lines[i]) - _indent(old[0])
+    new = []
+    for ln in _strip_line_numbers(new_text.splitlines()):
+        if not ln.strip():
+            new.append("")
+        elif shift >= 0:
+            new.append(" " * shift + ln)
+        else:
+            new.append(ln[min(-shift, _indent(ln)) :])
+    end = lines[i + n - 1]
+    tail = "\n" if end.endswith("\n") else ""
+    replacement = "\n".join(new) + tail if new else ""
+    return "".join(lines[:i]) + replacement + "".join(lines[i + n :])
+
+
+def _writable(d: WorkerDeps, path: str) -> Path:
+    """The file to write, once the task and agent scope allow it."""
+    c = d.caller
     if not d.writes:
         raise ModelRetry(f"{c.kind} tasks are read-only")
-    if not task_can_write(c.write_paths, c.paths, path, SENSITIVE_DIRS):
+    if not task_can_write(c.write_paths, c.paths, path, PROTECTED_DIRS):
         raise ModelRetry(
             f"{path} is outside this task's scope: your write_paths are {list(c.write_paths)} "
             f"and this task may write {list(c.paths)}"
         )
-    p = d.resolve(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(content)
-    return {"written": path, "bytes": len(content.encode())}
+    return d.resolve(path)
 
 
 def run_tests(ctx: RunContext[WorkerDeps], target: str = "") -> dict[str, Any]:
@@ -169,7 +261,14 @@ def run_tests(ctx: RunContext[WorkerDeps], target: str = "") -> dict[str, Any]:
     """
     if target and not is_safe_relative(target.split("::")[0]):
         raise ModelRetry("target must be a repo-relative test path")
-    ok, out, ms = gates.pytest(ctx.deps.root(), *([target] if target else []), timeout=180)
+    try:
+        ok, out, ms = gates.pytest(ctx.deps.root(), *([target] if target else []), timeout=180)
+    except envs.IndexUnreachable as e:
+        return {
+            "passed": False,
+            "output": f"{e}\nThe package index is unreachable right now; this is not a "
+            "problem with your code or requirements.txt. Try run_tests again shortly.",
+        }
     return {"passed": ok, "seconds": round(ms / 1000, 1), "output": out}
 
 
@@ -233,7 +332,7 @@ def complete_task(ctx: RunContext[WorkerDeps], summary: str) -> dict[str, Any]:
         # them, instead of spending a review round on them.
         changed = d.ws.changed_files(c.task_id)
         stray = [
-            f for f in changed if not task_can_write(c.write_paths, c.paths, f, SENSITIVE_DIRS)
+            f for f in changed if not task_can_write(c.write_paths, c.paths, f, PROTECTED_DIRS)
         ]
         if stray:
             # Something other than write_file made them, e.g. code that runs on import or
@@ -251,7 +350,16 @@ def complete_task(ctx: RunContext[WorkerDeps], summary: str) -> dict[str, Any]:
         if py:
             ok, out, _ = gates.ruff(d.root(), *py)
             if not ok:
-                raise ModelRetry(f"ruff fails on your files; fix it, then complete_task:\n{out}")
+                raise ModelRetry(
+                    "ruff fails on your files; fix each spot with edit_file, then "
+                    f"complete_task:\n{out}"
+                )
+        if c.kind == TaskKind.TEST and (untested := _untested(d.root(), py, c.task_id, d)):
+            raise ModelRetry(
+                f"the plan says this task covers {', '.join(untested)}, but no test is named "
+                f"for {'it' if len(untested) == 1 else 'them'}: add test_{_slug(untested[0])}_... "
+                "for each, then complete_task"
+            )
         sha = d.ws.commit(c.task_id, f"{c.agent}: {summary[:72]}\n\n{summary}", author=c.agent)
         rnd = d.orch.get_task(c.task_id)["revision_round"]
         if sha is None and rnd > 0:
@@ -268,13 +376,34 @@ def complete_task(ctx: RunContext[WorkerDeps], summary: str) -> dict[str, Any]:
     }
 
 
+def _slug(criterion: str) -> str:
+    """AC-3 -> ac3, the prefix of the tests that cover it."""
+    return re.sub(r"[^a-z0-9]", "", criterion.lower())
+
+
+def _untested(root: Path, py: list[str], task_id: str, d: WorkerDeps) -> list[str]:
+    """Criteria this test task covers that no test function in its files is named after."""
+    text = "\n".join((root / f).read_text(errors="replace") for f in py)
+    named = {m.lower() for m in re.findall(r"def (test_[A-Za-z0-9]+)", text)}
+    return [
+        ac
+        for ac in d.orch.planned_covers(task_id)
+        if not any(n == f"test_{_slug(ac)}" for n in named)
+    ]
+
+
 def submit_review(
     ctx: RunContext[WorkerDeps],
     verdict: Verdict,
     summary: str,
     findings: list[Finding] | None = None,
+    checks: list[Check] | None = None,
 ) -> dict[str, Any]:
     """Record your review of the change.
+
+    An approve needs one check per acceptance criterion: where the code meets it
+    (file:line) and which test proves it, e.g. "reconcile.py:42 uses max(|a|,|b|);
+    test_ac3_threshold asserts 1.0% is not a break". Only claim what you read.
 
     request_changes needs at least one blocker or major finding whose criterion_id cites
     an acceptance criterion (AC-1, ...), an engineering standard (STD-001, ...) or GAP.
@@ -291,9 +420,12 @@ def submit_review(
         verdict: approve or request_changes
         summary: one paragraph on what you checked
         findings: issues found; severity blocker | major | minor
+        checks: per criterion, the code and test that show it is met
     """
     d, c = ctx.deps, ctx.deps.caller
-    v = ReviewVerdict(verdict=verdict, findings=findings or [], summary=summary)
+    v = ReviewVerdict(
+        verdict=verdict, findings=findings or [], summary=summary, checks=checks or []
+    )
     status = _call(d.orch.record_review, c.task_id, v, actor=c.agent)
     return {"status": status, "next": "Review recorded. Reply with one line and stop."}
 
@@ -303,6 +435,7 @@ WORKER_TOOLS = [
     list_files,
     search_code,
     write_file,
+    edit_file,
     run_tests,
     submit_artifact,
     complete_task,

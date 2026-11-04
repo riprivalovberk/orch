@@ -8,28 +8,29 @@ import yaml
 from orch.core.orchestrator import TaskOrchestrator
 from orch.core.team import TeamRegistry
 from orch.db.session import open_db
-from orch.domain.schemas import AgentConfig, Plan
+from orch.domain.schemas import Plan
+from orch.runtime.envs import SHARED
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-@pytest.fixture
-def team() -> TeamRegistry:
-    return TeamRegistry.load(ROOT / "teams" / "fintech_sdlc.yaml")
+@pytest.fixture(autouse=True)
+def shared_python(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Target-repo tests run on orch's Python: no per-project installs (or network) here."""
+    monkeypatch.setenv(SHARED, "1")
 
 
 @pytest.fixture
-def team_with_security(team: TeamRegistry) -> TeamRegistry:
-    cfg = team.config.model_copy(deep=True)
-    cfg.agents.append(
-        AgentConfig(
-            name="security_reviewer",
-            description="Reviews payment code for PCI and PII exposure.",
-            capabilities=["security_review"],
-            tools=["read_file", "list_files", "search_code", "submit_review"],
-        )
-    )
+def team(team_with_security: TeamRegistry) -> TeamRegistry:
+    """The team without its security specialist, as before one was hired."""
+    cfg = team_with_security.config.model_copy(deep=True)
+    cfg.agents = [a for a in cfg.agents if "security_review" not in a.capabilities]
     return TeamRegistry(cfg)
+
+
+@pytest.fixture
+def team_with_security() -> TeamRegistry:
+    return TeamRegistry.load(ROOT / "teams" / "fintech_sdlc.yaml")
 
 
 @pytest.fixture

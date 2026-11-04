@@ -6,10 +6,14 @@ from sqlalchemy import text
 from orch.core.orchestrator import InvalidOperation, TaskOrchestrator
 from orch.domain.enums import EdgeKind, GateName, TaskKind, Verdict
 from orch.domain.enums import TaskStatus as S
-from orch.domain.schemas import Finding, GateResultIn, ProjectLimits, ReviewVerdict
+from orch.domain.schemas import Check, Finding, GateResultIn, ProjectLimits, ReviewVerdict
 
 ALL_GATES = [GateResultIn(gate=g, passed=True) for g in GateName]
-APPROVE = ReviewVerdict(verdict=Verdict.APPROVE, summary="meets every criterion")
+APPROVE = ReviewVerdict(
+    verdict=Verdict.APPROVE,
+    summary="meets every criterion",
+    checks=[Check(criterion_id=f"AC-{i}", evidence="transfers.py; test_ac") for i in range(1, 5)],
+)
 CHANGES = ReviewVerdict(
     verdict=Verdict.REQUEST_CHANGES,
     findings=[Finding(severity="blocker", issue="amount uses float", criterion_id="AC-2")],
@@ -291,7 +295,12 @@ def test_json_columns_round_trip_as_models(orch, team, good_plan):
 
 def test_planned_tasks_keep_their_paths(orch, team, good_plan):
     _, _, ids = planned(orch, team, good_plan)
-    assert orch.get_task(ids["implement_transfer"])["paths"] == ["minibank/api/transfers.py"]
+    tests = orch.get_task(ids["write_tests"])["paths"]
+    # The implement task may also fix the tests it waits on.
+    assert orch.get_task(ids["implement_transfer"])["paths"] == [
+        "minibank/api/transfers.py",
+        *tests,
+    ]
     assert orch.get_task(ids["gates"])["paths"] == []
 
 
@@ -359,3 +368,19 @@ def test_canceling_an_objective_cancels_its_tasks(orch, team, good_plan):
     assert st(orch, ids["write_tests"]) == S.DONE  # finished work stays finished
     for node in ("implement_transfer", "gates", "review_transfer", "approve"):
         assert st(orch, ids[node]) == S.CANCELED, node
+
+
+def test_approval_must_show_a_check_per_criterion(orch, team, good_plan):
+    _, _, ids = planned(orch, team, good_plan)
+    review = ids["review_transfer"]
+    for t in (ids["write_tests"], ids["implement_transfer"]):
+        start(orch, t)
+        orch.complete(t, "ok")
+    start(orch, ids["gates"])
+    orch.record_gate_results(ids["gates"], ALL_GATES)
+    start(orch, review)
+    partial = APPROVE.model_copy(update={"checks": APPROVE.checks[:3]})
+    with pytest.raises(InvalidOperation, match=r"missing for \['AC-4'\]"):
+        orch.record_review(review, partial)
+    orch.record_review(review, APPROVE)
+    assert "- AC-4: transfers.py; test_ac" in orch.get_task(review)["summary"]

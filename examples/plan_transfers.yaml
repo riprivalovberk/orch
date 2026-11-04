@@ -9,12 +9,12 @@ interface: >-
   Response. Body JSON {from, to, amount (Decimal string)}; header Idempotency-Key.
   201 on success, 422 on overdraft, the stored response again for a repeated key.
 nodes:
-  - {id: write_tests, kind: test, assignee: test_engineer, covers: [AC-1, AC-2, AC-3, AC-4],
+  - {id: write_tests, kind: test, assignee: developer, covers: [AC-1, AC-2, AC-3, AC-4],
      paths: [tests/test_transfers.py]}
   - {id: implement_transfer, kind: implement, assignee: developer,
      covers: [AC-1, AC-2, AC-3, AC-4], paths: [minibank/api/transfers.py]}
   - {id: gates, kind: gate, gates: [pytest, ruff, policy]}
-  - {id: review_transfer, kind: review, assignee: reviewer}
+  - {id: review_transfer, kind: review, assignee: code_reviewer}
   - {id: approve, kind: approval}
 edges:
   - [write_tests, implement_transfer, blocks]

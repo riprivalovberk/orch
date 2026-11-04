@@ -61,13 +61,6 @@ from orch.runtime.pm_tools import SPIKE_TOOLS, PMDeps, pm_tools
 ROOT = Path(__file__).resolve().parents[3]
 Outcome = Literal["accepted", "escalated", "no_plan", "timeout", "error"]
 
-SECURITY_REVIEWER = AgentConfig(
-    name="security_reviewer",
-    description="Reviews payment code for PCI and PII exposure, idempotency and authorization.",
-    capabilities=["security_review"],
-    tools=["read_file", "list_files", "search_code", "submit_review"],
-)
-
 
 @dataclass(frozen=True)
 class Scenario:
@@ -158,11 +151,12 @@ class TrialResult:
 
 
 def make_team(with_security: bool) -> TeamRegistry:
+    """The team file's team, with or without its security specialist."""
     team = TeamRegistry.load(ROOT / "teams" / "fintech_sdlc.yaml")
-    if not with_security:
+    if with_security:
         return team
     cfg = team.config.model_copy(deep=True)
-    cfg.agents.append(SECURITY_REVIEWER)
+    cfg.agents = [a for a in cfg.agents if "security_review" not in a.capabilities]
     return TeamRegistry(cfg)
 
 

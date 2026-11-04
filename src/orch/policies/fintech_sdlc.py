@@ -2,6 +2,7 @@
 
 SOD  segregation of duties     GATE  deterministic checks     COV  test coverage
 APR  human approval            PAY   payments code needs a security review
+SEC  code the plan marks as serving the network (exposes_network) needs a security review
 SCOPE  every test/implement node says what it writes, and its assignee may write it
 IFACE  a plan that builds code fixes its interface first, so tests and code agree
 
@@ -15,10 +16,15 @@ from collections.abc import Iterable
 from orch.core.plan import PlanGraph, Rule, ValidationContext, err
 from orch.core.scope import can_write, protected_grants, touches
 from orch.domain.enums import REVIEW_KINDS, EdgeKind, GateName, TaskKind
-from orch.domain.schemas import PlanError
+from orch.domain.schemas import PlanError, PlanNode
 
 REQUIRED_GATES = frozenset({GateName.PYTEST, GateName.RUFF, GateName.POLICY})
 SENSITIVE_DIRS = frozenset({"payments"})
+# Directories only a pattern naming them can write, however broad an agent's scope: payments
+# code, and the tests. Implement nodes never list tests/ (SCOPE-001): tests are planned in
+# test nodes, and an implement task may only fix the tests it waits on (see _materialize).
+TESTS_DIR = "tests"
+PROTECTED_DIRS = SENSITIVE_DIRS | {TESTS_DIR}
 BUILD_KINDS = frozenset({TaskKind.IMPLEMENT, TaskKind.TEST, *REVIEW_KINDS})
 WRITING_KINDS = (TaskKind.TEST, TaskKind.IMPLEMENT)
 MIN_INTERFACE_CHARS = 40
@@ -26,18 +32,22 @@ MIN_INTERFACE_CHARS = 40
 STANDARDS: dict[str, str] = {
     "STD-001": "One name per behavior: no aliases, wrappers that only rename, or duplicate "
     "keys holding the same value.",
-    "STD-002": "Object-oriented design where there is state or a workflow: small classes "
-    "with one job each, typed attributes (dataclasses), and no long procedural functions.",
-    "STD-003": "Use the well-known library for the job instead of hand-rolled code: pandas "
-    "for CSV and tabular data, decimal.Decimal for money, the standard library otherwise.",
-    "STD-004": "Readable and typed: type hints on public functions, docstrings on public "
-    "classes, constants named, no dead code or commented-out code.",
+    "STD-002": "Simplest code that meets the criteria: plain functions by default; a class "
+    "only when several functions share state. No layers, helpers used once, or speculative "
+    "abstractions.",
+    "STD-003": "Let the well-known library do the work instead of hand-rolled code: pandas "
+    "for CSV and tabular data (read_csv, groupby, merge; no row loops or cell-by-cell "
+    "parsing), decimal.Decimal for money, the standard library otherwise.",
+    "STD-004": "Readable and typed: type hints on public functions, constants named, no dead "
+    "code or commented-out code.",
     "STD-005": "Tests exercise the planned interface by its exact names; no guessing "
     "between alternative names (getattr/hasattr probing).",
-    "STD-006": "Fail loudly: bad or missing input (columns, files, parameters) raises or "
-    "returns a clear error naming it, never a silent default; no catch-all except that "
-    "hides a failure or stands in a fake for a missing dependency; output holds no NaN "
-    "or infinity.",
+    "STD-006": "Fail loudly at the boundary: bad or missing input the criteria name "
+    "(columns, files, parameters) raises or returns a clear error naming it, never a silent "
+    "default; no catch-all except that hides a failure or fakes a missing dependency. Do "
+    "not guard against inputs the criteria do not mention.",
+    "STD-007": "Short beats thorough: no more code than the criteria need. Code that is "
+    "plainly longer than it must be is a defect.",
 }
 
 
@@ -203,14 +213,23 @@ def scope_001_paths(g: PlanGraph, ctx: ValidationContext) -> Iterable[PlanError]
                 f"write_paths {list(card.write_paths)}",
             )
         for path in n.paths:
-            if can_write(card.write_paths, path, SENSITIVE_DIRS):
+            if n.kind == TaskKind.IMPLEMENT and touches([path], frozenset({TESTS_DIR})):
+                yield err(
+                    "SCOPE-001",
+                    n.id,
+                    f"{n.id} writes code and lists {path}; tests are planned in test nodes "
+                    "only (the implement task may still fix the tests it waits on)",
+                    f"remove {path} from {n.id} and put it on a test node",
+                )
+                continue
+            if can_write(card.write_paths, path, PROTECTED_DIRS):
                 continue
             able = [
                 a
                 for a in ctx.agents_with(n.kind)
-                if can_write(ctx.agents[a].write_paths, path, SENSITIVE_DIRS)
+                if can_write(ctx.agents[a].write_paths, path, PROTECTED_DIRS)
             ]
-            protected = sorted(touches([path], SENSITIVE_DIRS))
+            protected = sorted(touches([path], PROTECTED_DIRS))
             why = (
                 f" ({protected[0]}/ is only writable by agents whose scope names it)"
                 if (protected)
@@ -236,31 +255,61 @@ def pay_001_security_review(g: PlanGraph, ctx: ValidationContext) -> Iterable[Pl
             what = f"{n.id} is assigned to {n.assignee}, who can write {hits[0]}/ code"
         else:
             continue
-        if any(v.kind == TaskKind.SECURITY_REVIEW for v in g.verifiers_of(n.id)):
+        yield from _needs_security_review("PAY-001", n, what, g, ctx)
+
+
+def sec_001_network_exposure(g: PlanGraph, ctx: ValidationContext) -> Iterable[PlanError]:
+    """Implement nodes marked exposes_network need a security review.
+
+    The PM marks the node that builds an HTTP route, function trigger or webhook. Code that
+    serves the network without the mark fails the policy gate, so leaving it off does not
+    skip the review.
+    """
+    for n in g.nodes.values():
+        if not n.exposes_network:
             continue
-        specialists = [a for a in ctx.agents_with(TaskKind.SECURITY_REVIEW) if a != n.assignee]
-        if specialists:
-            yield err(
-                "PAY-001",
-                n.id,
-                f"{what}, so it needs a security review",
-                f"add a security_review node assigned to {specialists[0]} with a verifies "
-                f"edge from {n.id}",
-            )
-        else:
-            yield err(
-                "PAY-001",
-                n.id,
-                f"{what}, which requires a security review, but no agent in the team has "
-                "the security_review capability",
-                "a human must add a security reviewer to the team file; re-planning cannot "
-                "fix this",
-                escalate=True,
-            )
+        if n.kind != TaskKind.IMPLEMENT:
+            yield err("SEC-001", n.id, "only implement nodes take exposes_network")
+            continue
+        what = f"{n.id} serves callers over the network"
+        yield from _needs_security_review("SEC-001", n, what, g, ctx)
+
+
+def _needs_security_review(
+    rule: str, n: PlanNode, what: str, g: PlanGraph, ctx: ValidationContext
+) -> Iterable[PlanError]:
+    if any(v.kind == TaskKind.SECURITY_REVIEW for v in g.verifiers_of(n.id)):
+        return
+    specialists = [a for a in ctx.agents_with(TaskKind.SECURITY_REVIEW) if a != n.assignee]
+    if specialists:
+        yield err(
+            rule,
+            n.id,
+            f"{what}, so it needs a security review",
+            f"add a security_review node assigned to {specialists[0]} with a verifies "
+            f"edge from {n.id}",
+        )
+    else:
+        yield err(
+            rule,
+            n.id,
+            f"{what}, which requires a security review, but no agent in the team has "
+            "the security_review capability",
+            "a human must add a security reviewer to the team file; re-planning cannot fix this",
+            escalate=True,
+        )
 
 
 def iface_001_interface_first(g: PlanGraph, ctx: ValidationContext) -> Iterable[PlanError]:
-    """A plan with implement work states the interface, so tests and code are written to it."""
+    """A plan that builds code states the code's interface before anyone writes it.
+
+    The test developer writes the tests first, against code that does not exist yet, and the
+    developer writes the code afterwards in another worktree. The plan's interface is the
+    contract between them: module paths, classes and public functions with exact names,
+    arguments, return types and result fields. Both get it in their brief, and the reviewer
+    blocks tests that guess between names (STD-005). Only its presence is checked here (a
+    few words at least); whether it is complete shows when the tests import it.
+    """
     if g.of_kind(TaskKind.IMPLEMENT) and len(g.plan.interface.strip()) < MIN_INTERFACE_CHARS:
         yield err(
             "IFACE-001",
@@ -281,5 +330,6 @@ RULES: tuple[Rule, ...] = (
     apr_001_single_approval,
     scope_001_paths,
     pay_001_security_review,
+    sec_001_network_exposure,
     iface_001_interface_first,
 )

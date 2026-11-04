@@ -158,8 +158,12 @@ def write_empty_repo(repo: Path, name: str) -> None:
     """A new git repo with just enough for the gates: pytest, ruff, a README. No app code."""
     from orch.runtime.workspace import git
 
+    pkg = package_name(name)
     files = {
-        "README.md": f"# {name}\n\nBuilt by orch's agents. Tests run with `python -m pytest`.\n",
+        "README.md": (
+            f"# {name}\n\nBuilt by orch's agents. The code lives in the `{pkg}` package; "
+            "tests run with `python -m pytest`.\n"
+        ),
         "pyproject.toml": (
             f'[project]\nname = "{_slug(name)}"\nversion = "0.1.0"\nrequires-python = ">=3.12"\n'
             '\n[tool.pytest.ini_options]\ntestpaths = ["tests"]\naddopts = "-q"\n'
@@ -167,8 +171,8 @@ def write_empty_repo(repo: Path, name: str) -> None:
             '\n[tool.ruff.lint]\nselect = ["E", "F", "I", "B", "UP"]\n'
             # Tests import the package before it exists (test-first); without this, ruff sorts
             # it as third-party then, first-party once written, and the gate fails a file the
-            # developer may not touch. minibank/ is where the team's developers write code.
-            '\n[tool.ruff.lint.isort]\nknown-first-party = ["minibank"]\n'
+            # developer may not touch.
+            f'\n[tool.ruff.lint.isort]\nknown-first-party = ["{pkg}"]\n'
         ),
         ".gitignore": "__pycache__/\n*.pyc\n.pytest_cache/\n.ruff_cache/\n",
         "tests/__init__.py": "",
@@ -229,6 +233,12 @@ def upload_folder(folder: str) -> str:
 
 def _slug(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "project"
+
+
+def package_name(name: str) -> str:
+    """The project's Python package: its name as an identifier (positions-rec -> positions_rec)."""
+    pkg = _slug(name).replace("-", "_")
+    return pkg if pkg[0].isalpha() else f"p_{pkg}"
 
 
 WORK_KINDS = ("test", "implement", "review", "security_review")

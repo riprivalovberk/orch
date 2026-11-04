@@ -25,6 +25,7 @@ KNOWN_TOOLS = frozenset(
         "list_files",
         "search_code",
         "write_file",
+        "edit_file",
         "run_tests",
         "submit_artifact",
         "complete_task",
@@ -59,6 +60,8 @@ class AgentConfig(BaseModel):
     tools: list[str] = Field(default_factory=list)
     write_paths: list[str] = Field(default_factory=list)  # globs; see core/scope.py
     model: str = "muse-spark-1.3"
+    # Reasoning effort for this agent's runs; None leaves the server's default.
+    effort: Literal["minimal", "low", "medium", "high", "xhigh"] | None = None
     prompt: str = ""
 
     @field_validator("capabilities")
@@ -89,8 +92,9 @@ class AgentConfig(BaseModel):
 
     @model_validator(mode="after")
     def _writer_has_scope(self) -> AgentConfig:
-        if "write_file" in self.tools and not self.write_paths:
-            raise ValueError(f"{self.name} has write_file but no write_paths")
+        writes = {"write_file", "edit_file"} & set(self.tools)
+        if writes and not self.write_paths:
+            raise ValueError(f"{self.name} has {', '.join(sorted(writes))} but no write_paths")
         return self
 
 
@@ -131,6 +135,9 @@ class PlanNode(BaseModel):
     # test/implement nodes: repo files or globs this node will write. Checked against the
     # assignee's write_paths at plan time; write_file only allows paths matching both.
     paths: list[str] = Field(default_factory=list)
+    # implement nodes: the code serves callers over the network (an HTTP route, a function
+    # trigger, a webhook), so it needs a security review (SEC-001).
+    exposes_network: bool = False
 
     @field_validator("paths")
     @classmethod
@@ -204,10 +211,18 @@ class Finding(BaseModel):
     assumption: str | None = None  # a GAP finding's stand-in requirement until a human rules
 
 
+class Check(BaseModel):
+    """What a reviewer checked for one criterion, and where: the proof behind an approval."""
+
+    criterion_id: str
+    evidence: str  # the code and tests that meet it, e.g. "reconcile.py:42; test_ac3_*"
+
+
 class ReviewVerdict(BaseModel):
     verdict: Verdict
     findings: list[Finding] = Field(default_factory=list)
     summary: str = ""
+    checks: list[Check] = Field(default_factory=list)
 
 
 class GateResultIn(BaseModel):

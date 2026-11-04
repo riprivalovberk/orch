@@ -368,6 +368,13 @@ class TaskOrchestrator:
     def _materialize(self, s: Session, parent: Task, rec: PlanRecord, plan: Plan) -> dict[str, str]:
         """Turn an accepted plan into Task rows (one per node) and TaskDep rows (per edge)."""
         ids = {n.id: new_id("tsk") for n in plan.nodes}
+        nodes = {n.id: n for n in plan.nodes}
+        # An implement task may also fix the tests it waits on, when a test is wrong: the
+        # reviewers see every test change in its diff.
+        test_paths: dict[str, list[str]] = {}
+        for e in plan.edges:
+            if nodes[e.source].kind == TaskKind.TEST and nodes[e.target].kind == TaskKind.IMPLEMENT:
+                test_paths.setdefault(e.target, []).extend(nodes[e.source].paths)
         children: list[Task] = []
         for n in plan.nodes:
             child = Task(
@@ -380,7 +387,7 @@ class TaskOrchestrator:
                 title=n.title or n.id,
                 objective=n.objective,
                 gates=[g.value for g in n.gates],
-                paths=list(n.paths),
+                paths=list(dict.fromkeys([*n.paths, *test_paths.get(n.id, [])])),
                 assignee=n.assignee,
                 status=S.PENDING,
                 depth=parent.depth + 1,
@@ -659,6 +666,16 @@ class TaskOrchestrator:
                     "a GAP finding needs an assumption: the behavior the work should have "
                     f"until a human decides; missing on: {unassumed}"
                 )
+            agreed = sorted(self._root(s, v).acceptance_criteria or {})
+            if verdict.verdict == Verdict.APPROVE and v.kind == TaskKind.REVIEW:
+                shown = {c.criterion_id for c in verdict.checks if c.evidence.strip()}
+                unproven = [ac for ac in agreed if ac not in shown]
+                if unproven:
+                    raise InvalidOperation(
+                        "an approval needs a check for every acceptance criterion: the "
+                        "code (file:line) and the test that show it is met; missing for "
+                        f"{unproven}"
+                    )
             if verdict.verdict == Verdict.REQUEST_CHANGES:
                 blocking = [f for f in verdict.findings if f.severity in ("blocker", "major")]
                 if not blocking:
@@ -682,11 +699,11 @@ class TaskOrchestrator:
                         round=target.revision_round,
                         verdict=verdict.verdict,
                         findings=list(verdict.findings),
-                        summary=verdict.summary,
+                        summary=_with_checks(verdict),
                     )
                 )
             v.outcome = Outcome.PASS if verdict.verdict == Verdict.APPROVE else Outcome.FAIL
-            v.result_summary = verdict.summary
+            v.result_summary = _with_checks(verdict)
             self._transition(
                 s,
                 v,
@@ -969,6 +986,23 @@ class TaskOrchestrator:
                 }
                 for e in events
             ]
+
+    def verifier_kinds(self, task_id: str) -> set[TaskKind]:
+        """The kinds of verifier (gate, review, security_review) that check this task."""
+        with self.tx() as s:
+            return {TaskKind(t.kind) for t in self._verifiers(s, task_id)}
+
+    def planned_covers(self, task_id: str) -> list[str]:
+        """The criteria the accepted plan says this test task covers."""
+        with self.tx() as s:
+            t = self._task(s, task_id)
+            plan = s.scalars(
+                select(PlanRecord)
+                .where(PlanRecord.root_task_id == t.root_id, PlanRecord.valid.is_(True))
+                .order_by(PlanRecord.version.desc())
+            ).first()
+            node = plan and next((n for n in plan.spec.nodes if n.id == t.plan_node_id), None)
+            return list(node.covers) if node else []
 
     def verified_targets(self, verifier_id: str) -> list[str]:
         """The work task(s) a gate or review checks."""
@@ -1443,3 +1477,9 @@ class TaskOrchestrator:
         )
         self._transition(s, t, S.AWAITING_HUMAN, f"{kind} requested", actor=actor)
         return hr
+
+
+def _with_checks(verdict: ReviewVerdict) -> str:
+    """The review summary followed by what was checked for each criterion."""
+    lines = [f"- {c.criterion_id}: {c.evidence}" for c in verdict.checks]
+    return "\n".join([verdict.summary, *lines]) if lines else verdict.summary

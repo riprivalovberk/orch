@@ -37,7 +37,7 @@ def test_missing_review_is_sod_001(good_plan, team):
     errors = check(edit(good_plan, drop_nodes=["review_transfer"]), team)
     assert "SOD-001" in codes(errors)
     sod = next(e for e in errors if e.code == "SOD-001")
-    assert sod.node == "implement_transfer" and "reviewer" in sod.hint
+    assert sod.node == "implement_transfer" and "code_reviewer" in sod.hint
 
 
 def test_self_review_is_sod_001(good_plan, team, team_with_security):
@@ -111,7 +111,10 @@ def test_gate_before_later_implementation_is_gate_002(good_plan, team):
 def test_one_gate_over_parallel_implementations_clears_gate_002(good_plan, team):
     p = edit(
         good_plan,
-        add_nodes=[SECOND_IMPL, {"id": "review_api", "kind": "review", "assignee": "reviewer"}],
+        add_nodes=[
+            SECOND_IMPL,
+            {"id": "review_api", "kind": "review", "assignee": "code_reviewer"},
+        ],
         add_edges=[
             ["write_tests", "implement_api"],
             ["implement_api", "gates", "verifies"],
@@ -176,6 +179,37 @@ def test_payments_with_specialist_needs_node_then_clears(good_plan, team_with_se
     assert check(fixed, team_with_security) == []
 
 
+def test_network_node_needs_security_review_then_clears(good_plan, team_with_security):
+    p = good_plan.model_copy(deep=True)
+    p.acceptance_criteria["AC-1"] = "a quantity mismatch triggers a break"  # no endpoint
+    assert check(p, team_with_security) == []
+    next(n for n in p.nodes if n.id == "implement_transfer").exposes_network = True
+    errors = check(p, team_with_security)
+    assert codes(errors) == ["SEC-001"] and "security_reviewer" in errors[0].hint
+
+    fixed = edit(
+        p,
+        add_nodes=[
+            {"id": "security_check", "kind": "security_review", "assignee": "security_reviewer"}
+        ],
+        add_edges=[["implement_transfer", "security_check", "verifies"]],
+    )
+    assert check(fixed, team_with_security) == []
+
+
+def test_network_node_without_specialist_escalates(good_plan, team):
+    p = good_plan.model_copy(deep=True)
+    next(n for n in p.nodes if n.id == "implement_transfer").exposes_network = True
+    errors = check(p, team)
+    assert codes(errors) == ["SEC-001"] and errors[0].escalate
+
+
+def test_only_implement_nodes_expose_the_network(good_plan, team):
+    p = good_plan.model_copy(deep=True)
+    next(n for n in p.nodes if n.id == "write_tests").exposes_network = True
+    assert codes(check(p, team)) == ["SEC-001"]
+
+
 def test_payments_work_given_to_developer_is_scope_001(good_plan, team):
     """The dodge from the first live spike: move payments work to an agent without review."""
     p = good_plan.model_copy(deep=True)
@@ -194,6 +228,13 @@ def test_writing_node_without_paths_is_scope_001(good_plan, team):
     next(n for n in p.nodes if n.id == "write_tests").paths = []
     errors = check(p, team)
     assert codes(errors) == ["SCOPE-001"] and "tests/**" in errors[0].hint
+
+
+def test_implement_node_cannot_list_tests(good_plan, team):
+    p = good_plan.model_copy(deep=True)
+    next(n for n in p.nodes if n.id == "implement_transfer").paths.append("tests/conftest.py")
+    errors = check(p, team)
+    assert codes(errors) == ["SCOPE-001"] and "test nodes only" in errors[0].message
 
 
 def test_only_writing_nodes_take_paths(good_plan, team):

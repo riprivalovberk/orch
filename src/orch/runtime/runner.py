@@ -35,7 +35,7 @@ from orch.domain.enums import (
 from orch.domain.schemas import GateResultIn
 from orch.mcp.server import CALL_ID_META, serve
 from orch.policies import get_standards
-from orch.policies.fintech_sdlc import SENSITIVE_DIRS
+from orch.policies.fintech_sdlc import PROTECTED_DIRS
 from orch.runtime import gates
 from orch.runtime.model import DEFAULT_MODEL, cost_usd
 from orch.runtime.workspace import Workspace
@@ -43,6 +43,10 @@ from orch.runtime.workspace import Workspace
 log = logging.getLogger(__name__)
 S = TaskStatus
 WRITING = (TaskKind.TEST, TaskKind.IMPLEMENT)
+# What a writing task's brief shows of the repo so it need not spend turns reading it.
+MAX_BRIEF_FILES = 5
+CSV_PREVIEW_LINES = 4
+MAX_BRIEF_FILE_CHARS = 30_000
 
 #: What each kind of task must call to finish; used to nudge an agent that stopped early.
 FINISH = {
@@ -89,7 +93,7 @@ class Runner:
         price_as: str = DEFAULT_MODEL,
         parallel: int = 3,
         settings: OpenAIChatModelSettings | None = None,
-        agent_timeout_s: float = 900,
+        agent_timeout_s: float = 1800,
         request_limit: int = 40,
     ) -> None:
         self.orch = orch
@@ -237,7 +241,9 @@ class Runner:
                     changed=self.ws.changed_files(target_id),
                     agent_paths=agent.write_paths if agent else [],
                     task_paths=target["paths"],
-                    protected=SENSITIVE_DIRS,
+                    protected=PROTECTED_DIRS,
+                    security_reviewed=TaskKind.SECURITY_REVIEW
+                    in self.orch.verifier_kinds(target_id),
                 )
             )
         merged = combine(results)
@@ -257,6 +263,9 @@ class Runner:
             toolsets=[toolset],
             retries=3,
         )
+        settings = OpenAIChatModelSettings(**self.settings)
+        if cfg.effort:
+            settings["openai_reasoning_effort"] = cfg.effort
         usage = RunUsage()
         limits = UsageLimits(request_limit=self.request_limit)
         deps = _Deps(claim.run_token)
@@ -266,7 +275,7 @@ class Runner:
                     self.brief(task),
                     deps=deps,
                     model=self.model,
-                    model_settings=self.settings,
+                    model_settings=settings,
                     usage=usage,
                     usage_limits=limits,
                 )
@@ -275,7 +284,7 @@ class Runner:
                         f"You have not finished. Call {FINISH[TaskKind(task['kind'])]} now.",
                         deps=deps,
                         model=self.model,
-                        model_settings=self.settings,
+                        model_settings=settings,
                         usage=usage,
                         usage_limits=limits,
                         message_history=result.all_messages(),
@@ -302,6 +311,24 @@ class Runner:
         if task["kind"] not in REVIEW_KINDS:
             return []
         return [self.orch.get_task(t)["node"] for t in self.orch.verified_targets(task["id"])]
+
+    def _repo_context(self, task: dict[str, Any]) -> list[str]:
+        """What a writing task would otherwise spend turns reading: the header and first rows
+        of each CSV in the repo, and for an implement task the test files it must pass."""
+        root = self.ws.task_dir(task["id"])
+        if not root.is_dir():
+            return []
+        out = []
+        csvs = sorted(p for p in root.rglob("*.csv") if ".git" not in p.parts)
+        for p in csvs[:MAX_BRIEF_FILES]:
+            head = p.read_text(errors="replace").splitlines()[:CSV_PREVIEW_LINES]
+            out.append(f"{p.relative_to(root)} (first lines):\n" + "\n".join(head))
+        if task["kind"] == TaskKind.IMPLEMENT:
+            tests = sorted(p for p in (root / "tests").rglob("test_*.py"))[:MAX_BRIEF_FILES]
+            for p in tests:
+                text = p.read_text(errors="replace")[:MAX_BRIEF_FILE_CHARS]
+                out.append(f"{p.relative_to(root)}:\n```python\n{text}\n```")
+        return out
 
     def brief(self, task: dict[str, Any]) -> str:
         """The task as the agent reads it: objective, criteria, scope, and any feedback."""
@@ -359,6 +386,20 @@ class Runner:
                     "Other steps of the plan build the rest; their work is not part of this "
                     "task, so do not write it or ask for it here:\n" + "\n".join(others)
                 )
+        if kind in REVIEW_KINDS:
+            paths = sorted(
+                {
+                    p
+                    for t in self.orch.verified_targets(task["id"])
+                    for p in self.orch.get_task(t)["paths"]
+                }
+            )
+            if paths:
+                out.append(
+                    f"The work you review may write only {', '.join(paths)}. A change it needs "
+                    "outside those files is a GAP finding (severity minor) to disclose, never a "
+                    "blocker: the author cannot make it."
+                )
         if accepted and kind == TaskKind.TEST:
             code = [
                 f"- {n['id']}: writes {', '.join(n.get('paths') or []) or 'unspecified files'}"
@@ -373,10 +414,24 @@ class Runner:
                 )
         if kind in WRITING:
             out.append(
+                "Tests run in an environment with exactly the packages the project declares "
+                "(requirements.txt, or dependencies in pyproject.toml) plus pytest, so import "
+                "them normally: never stub or fake a package outside tests/. A package your "
+                "code needs goes in requirements.txt."
+            )
+            out.append(
                 "Files this task may write: "
                 + ", ".join(task["paths"])
-                + ". Read what is there first (list_files, read_file)."
+                + ". The repo's data files and (for an implement task) the tests are below, "
+                "so you need not read them; read other files only if you need them."
             )
+            out.extend(self._repo_context(task))
+            if task["attempt"] > 1 and (done := self.ws.changed_files(task["id"])):
+                out.append(
+                    "Your previous run on this task stopped before it finished (time limit or "
+                    "crash), but what it wrote is kept: " + ", ".join(done) + ". Read those "
+                    "files and carry on from them; do not start over."
+                )
             fb = self.orch.feedback(task["id"])
             if fb["reviews"] or fb["gates"]:
                 out.append(

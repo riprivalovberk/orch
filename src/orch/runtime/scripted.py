@@ -182,7 +182,14 @@ def scripted_team() -> FunctionModel:
         if "submit_review" in tools:
             return _call(
                 "submit_review",
-                {"verdict": "approve", "summary": "Every criterion is met and tested."},
+                {
+                    "verdict": "approve",
+                    "summary": "Every criterion is met and tested.",
+                    "checks": [
+                        {"criterion_id": ac, "evidence": "minibank/api/transfers.py; tests"}
+                        for ac in TRANSFERS_CRITERIA
+                    ],
+                },
             )
         steps: list[tuple[str, dict[str, Any]]]
         if "(test)" in prompt:

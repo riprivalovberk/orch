@@ -96,7 +96,7 @@ def test_offline_objective_runs_through_approval_to_main(client: TestClient, tmp
     said = [x["text"] for x in tl]
     assert any(t.startswith("plan v1 passed the checks") for t in said)
     assert "orch asked you to approve the change for merge" in said
-    assert "you answered: approve" in said and "merged into main" in said
+    assert "you approved the change for merge" in said and "merged into main" in said
     gate = next(s for s in steps if s["node"] == "gates")
     assert gate["note"] == "all checks passed" and gate["log"]
     assert not any("started" in m["text"] for m in chat if m["role"] == "activity")
@@ -414,6 +414,21 @@ def test_time_waiting_on_a_person_is_kept_apart():
     assert d["busy_ms"] == 40_000 and d["since"] == "2026-11-04T15:48:41.000+00:00"
     _track(d, {"from": "RUNNING", "to": "AWAITING_HUMAN"}, "2026-11-04T15:49:00.000+00:00")
     assert d["waiting_since"] == "2026-11-04T15:49:00.000+00:00"
+
+
+def test_timeline_says_what_a_person_answered_and_why_a_draft_failed():
+    from orch.web.server import _answer_line, _plan_errors
+
+    assert _answer_line("criteria", "approve") == "you approved the acceptance criteria"
+    assert _answer_line("approval", "reject") == "you rejected the change for merge"
+    assert _answer_line("question", "use EUR") == "you answered: use EUR"
+    errors = [
+        {"code": "COV-001", "message": f"criterion AC-{i} has no test node"} for i in (1, 2, 3)
+    ] + [{"code": "GATE-001", "message": "implement is not verified by gate(s) ruff"}]
+    assert _plan_errors(errors) == (
+        "COV-001: criterion AC-1 has no test node, and 2 more like it; "
+        "GATE-001: implement is not verified by gate(s) ruff"
+    )
 
 
 def test_choose_folder_returns_the_dialogs_pick_or_null(client: TestClient, monkeypatch):

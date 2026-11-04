@@ -16,6 +16,7 @@ import re
 import shutil
 import subprocess
 import sys
+import textwrap
 import threading
 import traceback
 from dataclasses import asdict, dataclass, field
@@ -321,6 +322,8 @@ def chat_messages(orch: TaskOrchestrator, runs: Runs, pid: str) -> dict[str, Any
         if root:
             timeline.setdefault(root, []).append({"ts": e["ts"], "text": text, "kind": kind})
 
+    asked: dict[str, str] = {}  # request id -> what was asked: "criteria", "approval" or "question"
+    drafts: dict[str, int] = {}  # objective -> plan drafts the PM has checked so far
     events = orch.list_events(project_id=pid, limit=20_000)
     from_chat = {e["payload"].get("objective_id") for e in events if e["type"] == "chat.reply"} - {
         None
@@ -346,28 +349,36 @@ def chat_messages(orch: TaskOrchestrator, runs: Runs, pid: str) -> dict[str, Any
             req = {"id": rid, "kind": p["kind"], "options": p["options"], "open": rid in open_reqs}
             out.append(_msg(e, "pm", p["prompt"], root_id=root, request=req))
             if p["kind"] == "approval":
+                asked[rid] = "approval"
                 mark(root, e, "orch asked you to approve the change for merge", "human")
             elif p["prompt"].startswith("AC-1"):
-                mark(root, e, "project_manager sent you the acceptance criteria", "human")
+                asked[rid] = "criteria"
+                mark(root, e, "the PM sent you the acceptance criteria to approve", "human")
             else:
+                asked[rid] = "question"
+                mark(root, e, f"the PM asked you: {p['prompt'].splitlines()[0][:80]}", "human")
+        elif kind == "human.responded":
+            out.append(_msg(e, "user", p["response"], root_id=root))
+            mark(root, e, _answer_line(asked.get(p["request_id"], ""), p["response"]), "human")
+        elif kind == "plan.checked":
+            n = drafts[root or ""] = drafts.get(root or "", 0) + 1
+            if not p["valid"]:
+                which = {1: "first", 2: "second", 3: "third"}.get(n, f"#{n}")
+                why = _plan_errors(p["errors"])
                 mark(
                     root,
                     e,
-                    f"project_manager asked you: {p['prompt'].splitlines()[0][:80]}",
-                    "human",
+                    f"the PM's {which} draft of the plan failed checks ({why}); revising",
+                    "fail",
                 )
-        elif kind == "human.responded":
-            out.append(_msg(e, "user", p["response"], root_id=root))
-            mark(root, e, f"you answered: {p['response'].splitlines()[0][:80]}", "human")
-        elif kind == "plan.checked" and not p["valid"]:
-            codes = ", ".join(sorted({err["code"] for err in p["errors"]}))
-            mark(root, e, f"project_manager's draft plan failed checks ({codes}); revising", "fail")
         elif kind == "plan.rejected":
             codes = ", ".join(sorted({err["code"] for err in p["errors"]}))
             out.append(
                 _msg(e, "activity", f"plan v{p['version']} failed checks ({codes}); revising")
             )
-            mark(root, e, f"plan v{p['version']} rejected ({codes}); revising", "fail")
+            mark(
+                root, e, f"plan v{p['version']} was rejected ({_plan_errors(p['errors'])})", "fail"
+            )
         elif kind == "plan.accepted":
             # Task ids are time-ordered, so sorting them gives the order the PM wrote the plan.
             ids = sorted(p["tasks"].values()) if isinstance(p["tasks"], dict) else []
@@ -494,6 +505,31 @@ def _track(d: dict[str, Any], p: dict[str, Any], ts: str) -> None:
         d["ended"] = d["ended"] if p["from"] == "WAITING" else ts  # root: planning time only
     elif to in ("READY", "RUNNING"):
         d["ended"] = None
+
+
+def _answer_line(asked: str, response: str) -> str:
+    """The timeline's line for a person's answer, saying what they answered."""
+    if asked == "criteria" and response == "approve":
+        return "you approved the acceptance criteria"
+    if asked == "approval" and response == "approve":
+        return "you approved the change for merge"
+    if asked == "approval" and response == "reject":
+        return "you rejected the change for merge"
+    if asked == "approval" and response == "override_approve":
+        return "you approved the change for merge, overriding a failed check"
+    return f"you answered: {response.splitlines()[0][:80]}"
+
+
+def _plan_errors(errors: list[dict[str, Any]]) -> str:
+    """Why a draft plan failed, briefly: each rule broken with its first message and a count."""
+    by_code: dict[str, list[str]] = {}
+    for err in errors:
+        by_code.setdefault(err["code"], []).append(err["message"])
+    parts = [
+        f"{code}: {msgs[0]}" + (f", and {len(msgs) - 1} more like it" if len(msgs) > 1 else "")
+        for code, msgs in by_code.items()
+    ]
+    return textwrap.shorten("; ".join(parts), 220, placeholder="…")
 
 
 def _ms(ts: str) -> int:

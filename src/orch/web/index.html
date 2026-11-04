@@ -210,12 +210,15 @@ const views = {
   async new() {
     return `<h2>New project</h2><p class="muted">A project is one target git repo, the agent team and a shared budget.
       Leave the repo empty to make a new folder in <span class="mono">${esc(O.data_dir)}/repos/&lt;name&gt;</span>;
-      a new or empty folder starts as an empty Python project (pyproject, README, tests/).</p>
+      a new or empty folder starts as the project you pick below.</p>
       <div class="card" style="max-width:640px">
         <label>Name</label><input id="pName" placeholder="payments-api">
         <label>Target repo folder (optional): an existing git repo, or a new or empty folder</label>
         <div class="row" style="flex-wrap:nowrap"><input id="pRepo" placeholder="~/code/my-service — leave empty for a new repo under the data folder">
           <button id="pBrowse" onclick="pickFolder()" style="white-space:nowrap">Browse…</button></div>
+        <label>A new repo starts as</label><select id="pStarter">
+          <option value="empty" selected>Empty Python project (pyproject, README, tests/)</option>
+          <option value="minibank">minibank sample bank app (needed for the offline demo)</option></select>
         <label>Budget (USD, shared by all objectives)</label><input id="pBudget" type="number" step="0.5" value="${O.default_budget}">
         <div class="row" style="margin-top:12px"><button class="primary" onclick="createProject()">Create project</button></div>
       </div>`;
@@ -319,7 +322,7 @@ function chatHtml(p) {
                 <div><label>Model</label><select id="oModel">${O.models.map(m => `<option ${m === O.default_model ? "selected" : ""}>${m}</option>`).join("")}</select></div>
                 <div><label>Agents at once</label><input id="oPar" type="number" min="1" value="3"></div>
                 <div><label>&nbsp;</label><label style="display:flex;gap:6px;align-items:center;color:var(--ink)">
-                  <input id="oOff" type="checkbox" style="width:auto"> Offline scripted demo (no chat, the message is the objective)</label></div>
+                  <input id="oOff" type="checkbox" style="width:auto"> Offline scripted demo (minibank projects; no chat, the message is the objective)</label></div>
               </div></details></div>
         </div>
       </div>
@@ -574,7 +577,7 @@ async function pickFolder() {
 }
 
 async function createProject() {
-  const r = await act(() => api("/projects", {name: $("#pName").value, repo: $("#pRepo").value, budget: $("#pBudget").value}), "Project created");
+  const r = await act(() => api("/projects", {name: $("#pName").value, repo: $("#pRepo").value, starter: $("#pStarter").value, budget: $("#pBudget").value}), "Project created");
   if (r) go(`#/project/${r.id}`);
 }
 async function loadFiles(pid) {

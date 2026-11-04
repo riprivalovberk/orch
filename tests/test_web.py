@@ -211,6 +211,21 @@ def test_new_projects_start_empty(client: TestClient):
     assert r.status_code == 400 and "minibank" in r.json()["error"]
 
 
+def test_minibank_starter_runs_offline_even_after_the_ui_restarts(client: TestClient):
+    c = client
+    p = c.post("/api/projects", json={"name": "Demo", "starter": "minibank"}).json()
+    files = [f["path"] for f in c.get(f"/api/projects/{p['id']}/files").json()]
+    assert "minibank/payments/cards.py" in files and "tests/test_ledger.py" in files
+    r = c.post(f"/api/projects/{p['id']}/objectives", json={"offline": True}).json()
+    [req] = wait_for_run(c, r["root_id"])["requests"]
+    runs(c).runs.clear()  # a restarted UI no longer knows the run was offline
+    c.post(f"/api/requests/{req['id']}/answer", json={"response": "approve"})
+    ob = wait_for_run(c, r["root_id"])
+    assert ob["run"]["options"]["offline"] and ob["run"]["report"]["status"] == "DONE", ob["run"]
+    bad = c.post("/api/projects", json={"name": "x", "starter": "nope"})
+    assert bad.status_code == 400 and "starter" in bad.json()["error"]
+
+
 def test_file_preview_reads_main(client: TestClient):
     p = client.post("/api/projects", json={"name": "rec"}).json()
     one = [("files", ("a.csv", b"x,y\n1,2\n", "text/csv"))]

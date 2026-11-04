@@ -51,10 +51,7 @@ class Workspace:
         if not (repo / ".git").exists():
             if template is None:
                 raise GitError(f"{repo} is not a git repo; run git init there and commit to main")
-            shutil.copytree(template, repo, dirs_exist_ok=True, ignore=_ignore)
-            git(repo, "init", "-q", "-b", "main")
-            git(repo, "add", "-A")
-            git(repo, "commit", "-q", "-m", "Initial import")
+            import_template(template, repo)
         worktrees.mkdir(parents=True, exist_ok=True)
         return cls(repo, worktrees)
 
@@ -200,6 +197,24 @@ class Workspace:
             git(obj, "merge", "--abort", check=False)
             return Merge(False, (p.stdout + p.stderr).strip())
         return Merge(True, self.head(obj))
+
+
+def import_template(template: Path, repo: Path) -> None:
+    """Copy a template folder into repo and make it a git repo: main, one commit."""
+    shutil.copytree(template, repo, dirs_exist_ok=True, ignore=_ignore)
+    git(repo, "init", "-q", "-b", "main")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "Initial import")
+
+
+def make_minibank(repo: Path) -> Path:
+    """A new git repo (main, one commit) holding the minibank sample app."""
+    from orch.paths import MINIBANK
+
+    if repo.exists() and (not repo.is_dir() or any(repo.iterdir())):
+        raise GitError(f"{repo} already exists and is not empty; pick a new folder")
+    import_template(MINIBANK, repo)
+    return repo.resolve()
 
 
 def _ignore(_dir: str, names: list[str]) -> set[str]:

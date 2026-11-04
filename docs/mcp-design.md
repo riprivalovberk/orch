@@ -73,10 +73,11 @@ real server and compare.
 
 ## Workspace
 
-- The target app is its own git repo, outside FinOrch (minibank: a small standard-library
-  Python service with a `payments/` package), so agent branches never touch FinOrch's history
-  and the team's paths (`minibank/**`, `tests/**`) are relative to that repo's root. FinOrch
-  keeps a copy only as a test fixture (`tests/fixtures/minibank/`).
+- The target app's source ships with FinOrch at `examples/minibank/` (a small
+  standard-library Python service with a `payments/` package). The agents never work on
+  that folder: `orch minibank` (or the UI's minibank starter) copies it into its own git
+  repo, by default `.orch/repos/minibank`, so agent branches never touch FinOrch's history
+  and the team's paths (`minibank/**`, `tests/**`) are relative to that repo's root.
 - Each objective gets a branch, `orch/<root task id>`, made from `main`.
 - **Parallel from day one:** each claimed test/implement task gets its **own git worktree**
   under `.orch/worktrees/<task id>`, on a branch made from the objective branch's current
@@ -118,7 +119,7 @@ Status (Nov 2026): all six steps are built and tested offline with a scripted te
 
 ## Decisions
 
-1. Target app source lives in its own repo (minibank), not in FinOrch; FinOrch keeps a test fixture copy.
+1. Target app source ships in `examples/minibank/`; `orch minibank` makes a fresh repo of it to work on.
 2. Parallel work from the start (worktree per task, PAR-001).
 3. Every agent uses the cheapest model, `muse-spark-1.3-contributor` (already the default).
 4. The policy gate checks that every changed file is inside the task's planned paths and

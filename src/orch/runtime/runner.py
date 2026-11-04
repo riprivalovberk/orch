@@ -111,6 +111,13 @@ class Runner:
 
     async def run(self, root_id: str, *, ask: Ask | None = None) -> RunReport:
         self.ws.start_objective(root_id)
+        # Which team ran it: a resume picks the scripted team again for an offline objective.
+        self.orch.log_event(
+            root_id,
+            "run.started",
+            {"model": self.model.model_name, "parallel": self.parallel},
+            actor="system",
+        )
         running: dict[str, asyncio.Task[None]] = {}
         async with serve(self.orch, self.ws) as self.url:
             while True:
@@ -464,6 +471,14 @@ class Runner:
                 "submit_review."
             )
         return "\n\n".join(out)
+
+
+def last_model(orch: TaskOrchestrator, root_id: str) -> str:
+    """The model the objective's latest run used ("" if it has not run)."""
+    started = [
+        e for e in orch.list_events(root_id=root_id, limit=100_000) if e["type"] == "run.started"
+    ]
+    return started[-1]["payload"]["model"] if started else ""
 
 
 def merge_into_main(

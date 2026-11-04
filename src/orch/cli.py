@@ -157,8 +157,13 @@ def run(
     """Run an objective end to end: plan, build in parallel, verify, approve, merge."""
     os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
     from orch.runtime.model import DEFAULT_MODEL, PRICES, meta_model
-    from orch.runtime.runner import Runner
-    from orch.runtime.scripted import TRANSFERS_CRITERIA, TRANSFERS_OBJECTIVE, scripted_team
+    from orch.runtime.runner import Runner, last_model
+    from orch.runtime.scripted import (
+        SCRIPTED_MODEL,
+        TRANSFERS_CRITERIA,
+        TRANSFERS_OBJECTIVE,
+        scripted_team,
+    )
     from orch.runtime.workspace import GitError, Workspace
 
     model_name = model_name or DEFAULT_MODEL
@@ -178,13 +183,17 @@ def run(
             raise typer.BadParameter(f"{resume} runs in {saved}, not {repo}")
         repo = Path(saved) if saved else repo
         root = resume
+        if not offline and last_model(orch, root) == SCRIPTED_MODEL:
+            offline = True  # the scripted team started it; a live model can't pick up its work
+            typer.echo("  started offline: resuming with the scripted team")
     else:
         if offline and not objective:
             objective, ac = TRANSFERS_OBJECTIVE, [f"{k}={v}" for k, v in TRANSFERS_CRITERIA.items()]
         if not objective:
             raise typer.BadParameter("give an objective, or --resume <root task id>")
         if repo is None:
-            raise typer.BadParameter("give --repo, the target git repo the agents work in")
+            hint = "; make a demo repo with: orch minibank" if offline else ""
+            raise typer.BadParameter(f"give --repo, the target git repo the agents work in{hint}")
         pid = orch.project_for_repo(str(repo))
         if pid is None:
             limits = ProjectLimits(budget_usd=budget or DEFAULT_BUDGET)
@@ -223,6 +232,25 @@ def run(
     if report.waiting_on:
         typer.echo(f"  answer with: orch answer <id> <response>, then orch run --resume {root}")
     typer.echo(f"  evidence: orch evidence {root}")
+
+
+@app.command()
+def minibank(
+    folder: Path | None = typer.Argument(
+        None, help="New folder for the repo (default: <data dir>/repos/minibank)"
+    ),
+) -> None:
+    """Make a fresh git repo of minibank, the sample bank app, to run the demos on."""
+    from orch.paths import default_minibank_repo
+    from orch.runtime.workspace import GitError, make_minibank
+
+    try:
+        repo = make_minibank((folder or default_minibank_repo()).expanduser().resolve())
+    except GitError as e:
+        raise typer.BadParameter(str(e)) from e
+    typer.secho(f"minibank repo ready: {repo}", fg="green")
+    typer.echo(f"  offline demo:  orch run --offline --repo {repo}")
+    typer.echo(f"  web UI:        orch ui, then + New project with repo folder {repo}")
 
 
 # ------------------------------------------------------------------------- humans
@@ -347,7 +375,7 @@ def ui(
     port: int = typer.Option(8765, help="Port"),
     team: Path = typer.Option(DEFAULT_TEAM, help="Team YAML file"),
 ) -> None:
-    """The web UI: create projects, run objectives, watch events, answer the inbox."""
+    """The web UI: projects, a chat with each project's PM, runs, approvals, evidence."""
     import uvicorn
 
     from orch.web.server import create_app

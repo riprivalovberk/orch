@@ -24,6 +24,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 ROOT = Path(__file__).resolve().parents[3]
 
+SCRIPTED_MODEL = "scripted-team"  # the offline team's model name, recorded on each run
 TRANSFERS_OBJECTIVE = "Add an idempotent POST /transfers endpoint in minibank/api/transfers.py"
 TRANSFERS_CRITERIA = {
     "AC-1": "A repeated Idempotency-Key never double-posts",
@@ -205,4 +206,4 @@ def scripted_team() -> FunctionModel:
             ]
         return _call(*steps[min(len(done), len(steps) - 1)])
 
-    return FunctionModel(respond, model_name="scripted-team")
+    return FunctionModel(respond, model_name=SCRIPTED_MODEL)

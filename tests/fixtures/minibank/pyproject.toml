@@ -1,7 +1,7 @@
 [project]
 name = "minibank"
 version = "0.1.0"
-description = "A tiny bank service: the app orch's agents change."
+description = "A tiny bank service: the app FinOrch's agents change."
 requires-python = ">=3.12"
 dependencies = ["pandas>=2"]
 

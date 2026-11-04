@@ -196,7 +196,7 @@ def write_empty_repo(repo: Path, name: str) -> None:
     pkg = package_name(name)
     files = {
         "README.md": (
-            f"# {name}\n\nBuilt by orch's agents. The code lives in the `{pkg}` package; "
+            f"# {name}\n\nBuilt by FinOrch's agents. The code lives in the `{pkg}` package; "
             "tests run with `python -m pytest`.\n"
         ),
         "pyproject.toml": (
@@ -342,7 +342,7 @@ def chat_messages(orch: TaskOrchestrator, runs: Runs, pid: str) -> dict[str, Any
             out.append(_msg(e, "pm", p["prompt"], root_id=root, request=req))
             if p["kind"] == "approval":
                 asked[rid] = "approval"
-                mark(root, e, "orch asked you to approve the change for merge", "human")
+                mark(root, e, "FinOrch asked you to approve the change for merge", "human")
             elif p["prompt"].startswith("AC-1"):
                 asked[rid] = "criteria"
                 mark(root, e, "the PM sent you the acceptance criteria to approve", "human")

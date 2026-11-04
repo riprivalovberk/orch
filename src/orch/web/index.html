@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>orch</title>
+<title>FinOrch</title>
 <style>
 :root {
   --bg: #f6f6f4; --panel: #fff; --ink: #1c1c1a; --muted: #6b6b66; --line: #e3e2de;
@@ -136,7 +136,7 @@ section#view.chat-mode { padding: 0; display: flex; flex-direction: column; heig
 </head>
 <body>
 <header>
-  <h1>orch</h1>
+  <h1>FinOrch</h1>
   <nav id="nav">
     <a href="#/" data-v="projects">Projects</a>
     <a href="#/team" data-v="team">Team</a>
@@ -284,7 +284,7 @@ const views = {
           ${k.source === ".env" ? `<button class="danger" onclick="removeKey()">Remove</button>` : ""}</div>
         <p class="muted" style="font-size:12px">Takes effect for the next run or chat message; no restart needed.</p></div>
       <div class="card"><div class="muted">Data folder</div><div class="mono">${esc(O.data_dir)}</div></div>
-      <div class="card"><strong>Delete</strong><p class="muted">Remove what orch created. The database stays while the UI holds it open
+      <div class="card"><strong>Delete</strong><p class="muted">Remove what FinOrch created. The database stays while the UI holds it open
         (stop the UI and run <span class="mono">uv run orch nuke db</span>).</p>
         <div class="row"><button class="danger" onclick="nuke('spike')">Delete spike results</button>
         <button class="danger" onclick="nuke('repos')">Delete target repos and worktrees</button></div></div>
@@ -359,7 +359,7 @@ function toggleFiles(pid) {
 }
 
 function msgHtml(m, objectives) {
-  const who = m.role === "user" ? "You" : m.actor === "system" ? "orch" : "PM";
+  const who = m.role === "user" ? "You" : m.actor === "system" ? "FinOrch" : "PM";
   const req = m.request;
   let extra = "";
   if (m.steps) {

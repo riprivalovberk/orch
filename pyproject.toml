@@ -1,7 +1,7 @@
 [project]
 name = "orch"
 version = "0.1.0"
-description = "Multi-agent SDLC orchestrator: agents plan their own workflow, the plan is validated before anything runs."
+description = "FinOrch, a multi-agent SDLC orchestrator: agents plan their own workflow, the plan is validated before anything runs."
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"

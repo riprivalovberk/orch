@@ -304,7 +304,7 @@ def chat_messages(orch: TaskOrchestrator, runs: Runs, pid: str) -> dict[str, Any
     """
     objectives = {o["id"]: o for o in orch.objectives(pid)}
     tasks = {t["id"]: t for root in objectives for t in orch.task_tree(root)}
-    open_reqs = {r["id"]: r for r in orch.open_human_requests(pid)}
+    open_reqs = {r["id"]: {**r, "criteria": _is_criteria(r)} for r in orch.open_human_requests(pid)}
     out: list[dict[str, Any]] = []
     # Each objective's plan message carries live steps; their updates fold in under them.
     plan_msgs: dict[str, dict[str, Any]] = {}
@@ -343,12 +343,18 @@ def chat_messages(orch: TaskOrchestrator, runs: Runs, pid: str) -> dict[str, Any
             out.append(_msg(e, "pm", p["text"], root_id=p.get("objective_id")))
         elif kind == "human.requested":
             rid = p["request_id"]
-            req = {"id": rid, "kind": p["kind"], "options": p["options"], "open": rid in open_reqs}
+            req = {
+                "id": rid,
+                "kind": p["kind"],
+                "options": p["options"],
+                "open": rid in open_reqs,
+                "criteria": _is_criteria(p),
+            }
             out.append(_msg(e, "pm", p["prompt"], root_id=root, request=req))
             if p["kind"] == "approval":
                 asked[rid] = "approval"
                 mark(root, e, "FinOrch asked you to approve the change for merge", "human")
-            elif p["prompt"].startswith("AC-1"):
+            elif req["criteria"]:
                 asked[rid] = "criteria"
                 mark(root, e, "the PM sent you the acceptance criteria to approve", "human")
             else:
@@ -518,6 +524,11 @@ def _track(d: dict[str, Any], p: dict[str, Any], ts: str) -> None:
         d["ended"] = d["ended"] if p["from"] == "WAITING" else ts  # root: planning time only
     elif to in ("READY", "RUNNING"):
         d["ended"] = None
+
+
+def _is_criteria(req: dict[str, Any]) -> bool:
+    """The PM's acceptance criteria sent for approval: an open question listing AC-1, AC-2..."""
+    return req["kind"] != "approval" and not req["options"] and req["prompt"].startswith("AC-1")
 
 
 def _answer_line(asked: str, response: str) -> str:

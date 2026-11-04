@@ -68,6 +68,7 @@ def test_offline_objective_runs_through_approval_to_main(client: TestClient, tmp
         "kind": "approval",
         "options": req["options"],
         "open": True,
+        "criteria": False,
     }
     assert chat["open_requests"][0]["id"] == req["id"] and chat["running"] == []
     assert c.get("/api/inbox").status_code == 404  # no inbox: decisions are answered in the chat
@@ -224,6 +225,28 @@ def test_minibank_starter_runs_offline_even_after_the_ui_restarts(client: TestCl
     assert ob["run"]["options"]["offline"] and ob["run"]["report"]["status"] == "DONE", ob["run"]
     bad = c.post("/api/projects", json={"name": "x", "starter": "nope"})
     assert bad.status_code == 400 and "starter" in bad.json()["error"]
+
+
+def test_criteria_to_confirm_are_marked_so_the_chat_can_offer_approve(client: TestClient):
+    c = client
+    p = c.post("/api/projects", json={"name": "crit"}).json()
+    body = {"objective": "Add transfers", "start": False}
+    root = c.post(f"/api/projects/{p['id']}/objectives", json=body).json()["root_id"]
+    orch = runs(c).orch
+    assert orch.claim(root) is not None
+    rid = orch.request_human(root, "AC-1: Posts once per key.\nAC-2: Decimal amounts.")
+    chat = c.get(f"/api/projects/{p['id']}/chat").json()
+    [ask] = [m for m in chat["messages"] if m.get("request")]
+    assert ask["request"]["criteria"] and ask["request"]["open"]
+    assert chat["open_requests"][0]["criteria"]
+    c.post(f"/api/requests/{rid}/answer", json={"response": "approve"})
+    tl = c.get(f"/api/projects/{p['id']}/chat").json()["messages"]
+    assert not next(m for m in tl if m.get("request"))["request"]["open"]
+
+    assert orch.claim(root) is not None
+    orch.request_human(root, "Which account pays the fee?")
+    chat = c.get(f"/api/projects/{p['id']}/chat").json()
+    assert not chat["open_requests"][0]["criteria"]  # a plain question: no Approve button
 
 
 def test_file_preview_reads_main(client: TestClient):

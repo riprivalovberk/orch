@@ -376,10 +376,13 @@ function msgHtml(m, objectives) {
   let acts = "";
   if (req && req.open && req.options.length)
     acts = `<div class="acts">${req.options.map(o => `<button class="${["approve", "override_approve"].includes(o) ? "primary" : ""}" onclick="answer('${req.id}', ${esc(JSON.stringify(o))})">${esc(OPTION_LABELS[o] || o)}</button>`).join("")}</div>`;
+  else if (req && req.open && req.criteria)
+    acts = `<div class="acts" style="align-items:center"><button class="primary" onclick="answer('${req.id}', 'approve')">Approve criteria</button>
+      <span class="muted" style="font-size:12px">or reply below with what to change</span></div>`;
   else if (req && req.open) acts = `<div class="acts muted" style="font-size:12px">Reply below.</div>`;
   const cls = `msg ${m.role}${req && req.open ? " ask" : ""}`;
   const wf = m.steps ? stepsHtml(m.steps, m.timeline || [], m.root_id || "") : "";
-  let html = `<div class="${cls}"><div class="who">${who}${req ? " · " + esc(req.kind) : ""}</div><div class="bubble">${esc(m.text)}${extra}</div>${wf}${acts}</div>`;
+  let html = `<div class="${cls}"><div class="who">${who}${req ? " · " + (req.criteria ? "acceptance criteria" : esc(req.kind)) : ""}</div><div class="bubble">${esc(m.text)}${extra}</div>${wf}${acts}</div>`;
   if (m.starts_objective) {
     const o = objectives.find(x => x.id === m.root_id);
     html = `<div class="divider">New objective · ${o ? st(o.status) : ""} <a href="#/objective/${m.root_id}">tasks and evidence</a></div>` + html;
@@ -479,7 +482,9 @@ async function loadChat(pid) {
   const open = data.open_requests, q = open.find(r => !r.options.length);
   const thinking = data.working.some(w => w.startsWith("the PM is writing"));
   if (!q) askInstead = false;
-  chatMode = q && !askInstead ? {kind: "answer", id: q.id, text: "Your message answers the PM's question above."}
+  chatMode = q && !askInstead ? {kind: "answer", id: q.id, text: q.criteria
+      ? "Approve the criteria above, or reply with what to change."
+      : "Your message answers the PM's question above."}
     : {kind: "chat", text: askInstead ? "Your message is a new question for the PM, not an answer."
         : open.length ? "A decision is waiting above: click it, or reply \"approve\" or \"reject\". You can still ask the PM anything."
         : data.running.length ? "The team is working. Ask the PM anything; you'll be asked here when they need you."

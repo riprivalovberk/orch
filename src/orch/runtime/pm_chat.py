@@ -46,6 +46,10 @@ that is still waiting for their approval, do not start new work: a new objective
 from main, without that unapproved code. Tell them to reject it and then ask again for the
 whole change with their tweak included, since a rejected change is not kept; suggest
 that request in one sentence.
+
+You cannot approve, reject or answer a decision the team is waiting on, so never say that
+something was approved, rejected or merged. If the person wants to decide, tell them to
+click Approve or Reject on the decision above, or to reply with just "approve" or "reject".
 """
 
 

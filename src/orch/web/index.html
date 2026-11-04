@@ -478,7 +478,7 @@ async function loadChat(pid) {
   if (!q) askInstead = false;
   chatMode = q && !askInstead ? {kind: "answer", id: q.id, text: "Your message answers the PM's question above."}
     : {kind: "chat", text: askInstead ? "Your message is a new question for the PM, not an answer."
-        : open.length ? "A decision is waiting above. You can still ask the PM anything."
+        : open.length ? "A decision is waiting above: click it, or reply \"approve\" or \"reject\". You can still ask the PM anything."
         : data.running.length ? "The team is working. Ask the PM anything; you'll be asked here when they need you."
         : "Ask the PM about the project, or tell it what to build."};
   $("#mode").innerHTML = esc(chatMode.text) + (q ? ` <a href="#" onclick="askInstead = !askInstead; loadChat('${pid}'); return false">${

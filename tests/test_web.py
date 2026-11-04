@@ -385,6 +385,36 @@ def test_rejecting_the_change_says_what_to_do_next(client: TestClient, tmp_path:
     assert "Merge obj/" not in head  # main untouched
 
 
+def test_a_short_chat_reply_is_the_decision(client: TestClient, tmp_path: Path):
+    c = client
+    bank = str(minibank_repo(tmp_path / "bank"))
+    p = c.post("/api/projects", json={"name": "Say", "repo": bank}).json()
+    r = c.post(f"/api/projects/{p['id']}/objectives", json={"offline": True}).json()
+    wait_for_run(c, r["root_id"])
+    said = c.post(f"/api/projects/{p['id']}/say", json={"text": "ok approve"}).json()
+    assert said["status"] and said["resumed"]  # answered like the button; no PM call
+    ob = wait_for_run(c, r["root_id"])
+    assert ob["run"]["state"] != "running" and not runs(c).orch.open_human_requests(p["id"])
+    head = subprocess.run(
+        ["git", "log", "--oneline"], cwd=bank, capture_output=True, text=True
+    ).stdout
+    assert "Merge obj/" in head
+
+
+def test_short_decision_only_takes_a_bare_yes_or_no():
+    from orch.web.server import short_decision
+
+    both = ["approve", "reject"]
+    assert [short_decision(t, both) for t in ["Ok, approve!", "lgtm", "no, reject it"]] == [
+        "approve",
+        "approve",
+        "reject",
+    ]
+    assert short_decision("approve but rename it", both) is None
+    assert short_decision("did you use numpy", both) is None
+    assert short_decision("approve", ["a", "b"]) is None
+
+
 def test_step_time_counts_only_working_time():
     # a gate that ran twice, two minutes apart, because a reviewer sent the code back
     d: dict = {"started": None, "ended": None}

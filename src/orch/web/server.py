@@ -846,6 +846,9 @@ def create_app(
         text = (body.get("text") or "").strip()
         if not text:
             raise ApiError("say something")
+        decisions = [r for r in orch.open_human_requests(pid) if r["options"]]
+        if len(decisions) == 1 and (said := short_decision(text, decisions[0]["options"])):
+            return answer_request(decisions[0]["id"], said)
         opts = run_options(body)
         if opts.offline:  # the scripted team has no chat: the message is the objective
             return await create_objective_from(pid, {**body, "objective": text})
@@ -947,17 +950,21 @@ def create_app(
             limit=min(int(q.get("limit") or 500), 2000),
         )
 
-    async def answer(req: Request) -> dict[str, Any]:
-        body = await req.json()
-        rid = req.path_params["rid"]
-        status = orch.resolve_human(rid, str(body["response"]))
+    def answer_request(rid: str, response: str, resume: bool = True) -> dict[str, Any]:
+        status = orch.resolve_human(rid, response)
         out: dict[str, Any] = {"status": status, "resumed": False}
-        if body.get("resume", True):
+        if resume:
             root = _root_of_request(orch, rid)
             if root and root not in runs.running():
                 runs.start(root)
                 out["resumed"] = True
         return out
+
+    async def answer(req: Request) -> dict[str, Any]:
+        body = await req.json()
+        return answer_request(
+            req.path_params["rid"], str(body["response"]), bool(body.get("resume", True))
+        )
 
     async def task(req: Request) -> dict[str, Any]:
         from orch.runtime.workspace import GitError, Workspace
@@ -1082,6 +1089,27 @@ def create_app(
     app = Starlette(routes=routes)
     app.state.runs = runs
     return app
+
+
+# A short chat reply to an open Approve / Reject decision is that decision, as if clicked.
+_SAID = {
+    "approve": re.compile(
+        r"(?:(?:ok(?:ay)?|yes|yep|sure)\W*)?(?:i\s+)?"
+        r"(?:approved?(?:\s+it)?|lgtm|merge(?:\s+it)?|ship\s+it|go\s+ahead|yes|ok(?:ay)?)"
+    ),
+    "reject": re.compile(
+        r"(?:no\W*)?(?:i\s+)?(?:reject(?:ed)?(?:\s+it)?|don'?t\s+merge(?:\s+it)?|no)"
+    ),
+}
+
+
+def short_decision(text: str, options: list[str]) -> str | None:
+    """'ok approve' -> 'approve' when the request offers it; None for anything longer."""
+    said = re.sub(r"[\s.!]+$", "", text.strip().lower())
+    for option, pattern in _SAID.items():
+        if option in options and pattern.fullmatch(said):
+            return option
+    return None
 
 
 def _root_of_request(orch: TaskOrchestrator, request_id: str) -> str | None:

@@ -39,8 +39,13 @@ and say which branch they are on and whether they are merged into main.
 
 Only when the person asks for new work or a change to the code, call start_objective with
 one clear objective in their words (name the files and data it concerns); the team then
-drafts criteria with them and plans. Do not plan, estimate or design here, and do not
-start work for a question. If the request is unclear, ask one short question instead.
+drafts criteria with them and plans. Do not write acceptance criteria, plan, estimate or
+design here (the team sends the criteria next), and do not start work for a question. If
+the request is unclear, ask one short question instead. If the person asks to change work
+that is still waiting for their approval, do not start new work: a new objective starts
+from main, without that unapproved code. Tell them to reject it and then ask again for the
+whole change with their tweak included, since a rejected change is not kept; suggest
+that request in one sentence.
 """
 
 

@@ -23,8 +23,8 @@ from orch.domain.schemas import AgentConfig, Plan
 from orch.mcp.server import AgentMCP
 from orch.policies.fintech_sdlc import PROTECTED_DIRS
 from orch.runtime import gates, scripted
-from orch.runtime.runner import Runner
-from orch.runtime.workspace import Workspace
+from orch.runtime.runner import Runner, merge_into_main
+from orch.runtime.workspace import Workspace, git
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = ROOT / "examples" / "minibank"
@@ -95,6 +95,38 @@ def test_conflicting_merge_is_aborted(ws: Workspace):
         text=True,
     ).stdout
     assert status == ""  # aborted cleanly
+
+
+def test_main_moving_reruns_the_tests_before_merging(ws: Workspace):
+    d = ws.open_task("root", "t1")
+    (d / "minibank" / "a.py").write_text("A = 1\n")
+    ws.commit("t1", "a", author="developer")
+    assert ws.merge_task("root", "t1").ok
+    ran: list[Path] = []
+    passing = lambda cwd: (ran.append(cwd), (True, "", 1))[1]  # noqa: E731
+    # another objective merged first: main moved after this one was built
+    (ws.repo / "minibank" / "b.py").write_text("B = 2\n")
+    git(ws.repo, "add", "-A")
+    git(ws.repo, "commit", "-q", "-m", "another objective")
+    before = ws.head(ws.repo)
+
+    kind, detail = merge_into_main(ws, "root", tests=lambda cwd: (False, "2 failed", 1))
+    assert (kind, detail) == ("workspace.merge_blocked", "2 failed")
+    assert ws.head(ws.repo) == before  # main untouched
+    assert not (ws.objective_dir("root") / "minibank" / "b.py").exists()  # branch as it was
+
+    kind, _ = merge_into_main(ws, "root", tests=passing)
+    assert kind == "workspace.merged_to_main" and ran == [ws.objective_dir("root")]
+    assert (ws.repo / "minibank" / "a.py").exists() and (ws.repo / "minibank" / "b.py").exists()
+
+
+def test_merge_skips_the_rerun_when_main_did_not_move(ws: Workspace):
+    d = ws.open_task("root", "t1")
+    (d / "minibank" / "a.py").write_text("A = 1\n")
+    ws.commit("t1", "a", author="developer")
+    ws.merge_task("root", "t1")
+    kind, _ = merge_into_main(ws, "root", tests=lambda cwd: pytest.fail("no rerun needed"))
+    assert kind == "workspace.merged_to_main"
 
 
 # ------------------------------------------------------------------------- gates

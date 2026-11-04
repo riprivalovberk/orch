@@ -202,16 +202,16 @@ class Runner:
     def _finish(self, root_id: str, status: str) -> RunReport:
         if status != S.DONE:
             return RunReport(root_id, status, note="objective did not pass")
-        m = self.ws.finish_objective(root_id)
+        kind, detail = merge_into_main(self.ws, root_id)
         self.orch.log_event(
             root_id,
-            "workspace.merged_to_main" if m.ok else "workspace.merge_conflict",
-            {"branch": self.ws.objective_branch(root_id), "detail": m.detail[-2000:]},
+            kind,
+            {"branch": self.ws.objective_branch(root_id), "detail": detail[-2000:]},
             actor="system",
         )
-        if not m.ok:
-            return RunReport(root_id, status, note=f"could not merge into main:\n{m.detail}")
-        return RunReport(root_id, status, merged_into_main=m.detail)
+        if kind != "workspace.merged_to_main":
+            return RunReport(root_id, status, note=f"could not merge into main:\n{detail}")
+        return RunReport(root_id, status, merged_into_main=detail)
 
     # ------------------------------------------------------------------ one task
 
@@ -352,8 +352,10 @@ class Runner:
                 )
             elif not criteria:
                 out.append(
-                    "Put the criteria the human agreed to, with their changes, in the plan's "
-                    "acceptance_criteria. If they asked for changes you are unsure of, ask again."
+                    "If the human approved the criteria, or only dropped some, put them in the "
+                    "plan's acceptance_criteria and plan. If they changed or added criteria, "
+                    "send the revised list back with request_human_input once and plan only "
+                    "after they approve it."
                 )
             else:
                 out.append("Plan the work for the team now.")
@@ -462,6 +464,32 @@ class Runner:
                 "submit_review."
             )
         return "\n\n".join(out)
+
+
+def merge_into_main(
+    ws: Workspace,
+    root_id: str,
+    tests: Callable[[Any], tuple[bool, str, int]] = gates.pytest,
+) -> tuple[str, str]:
+    """Merge an approved objective into main, as the event to log and its detail.
+
+    If main moved since the objective was built, main is brought into it and its tests run
+    again first: two changes that each passed can still fail together, and main must not
+    break. A failure leaves both main and the objective's branch as they were.
+    """
+    caught = ws.catch_up(root_id)
+    if caught is not None and not caught.ok:
+        return "workspace.merge_conflict", caught.detail
+    if caught is not None:
+        try:
+            ok, out, _ = tests(ws.objective_dir(root_id))
+        except Exception as e:  # e.g. the package index is unreachable: don't merge blind
+            ok, out = False, f"{type(e).__name__}: {e}"
+        if not ok:
+            ws.undo_catch_up(root_id)
+            return "workspace.merge_blocked", out
+    m = ws.finish_objective(root_id)
+    return ("workspace.merged_to_main" if m.ok else "workspace.merge_conflict"), m.detail
 
 
 def gate_names(gate: dict[str, Any]) -> list[str]:

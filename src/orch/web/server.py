@@ -1,4 +1,4 @@
-"""Web UI: projects, objectives, live events, the human inbox and evidence, on one page.
+"""Web UI: projects, objectives, live events, the PM chat and evidence, on one page.
 
     uv run orch ui            # http://127.0.0.1:8765
 
@@ -16,9 +16,11 @@ import re
 import shutil
 import subprocess
 import sys
+import textwrap
 import threading
 import traceback
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -313,6 +315,16 @@ def chat_messages(orch: TaskOrchestrator, runs: Runs, pid: str) -> dict[str, Any
     timing: dict[str, dict[str, str | None]] = {}
     logs: dict[str, list[dict[str, str]]] = {}
     notes: dict[str, str] = {}
+    # Each objective's timeline: everything that happened to it, in order, handoffs included.
+    timeline: dict[str, list[dict[str, str]]] = {}
+
+    def mark(root: str | None, e: dict[str, Any], text: str, kind: str = "step") -> None:
+        if root:
+            timeline.setdefault(root, []).append({"ts": e["ts"], "text": text, "kind": kind})
+
+    asked: dict[str, str] = {}  # request id -> what was asked: "criteria", "approval" or "question"
+    drafts: dict[str, int] = {}  # objective -> plan drafts the PM has checked so far
+    rejected: set[str] = set()  # objectives whose change the person rejected at approval
     events = orch.list_events(project_id=pid, limit=20_000)
     from_chat = {e["payload"].get("objective_id") for e in events if e["type"] == "chat.reply"} - {
         None
@@ -337,12 +349,38 @@ def chat_messages(orch: TaskOrchestrator, runs: Runs, pid: str) -> dict[str, Any
             rid = p["request_id"]
             req = {"id": rid, "kind": p["kind"], "options": p["options"], "open": rid in open_reqs}
             out.append(_msg(e, "pm", p["prompt"], root_id=root, request=req))
+            if p["kind"] == "approval":
+                asked[rid] = "approval"
+                mark(root, e, "orch asked you to approve the change for merge", "human")
+            elif p["prompt"].startswith("AC-1"):
+                asked[rid] = "criteria"
+                mark(root, e, "the PM sent you the acceptance criteria to approve", "human")
+            else:
+                asked[rid] = "question"
+                mark(root, e, f"the PM asked you: {p['prompt'].splitlines()[0][:80]}", "human")
         elif kind == "human.responded":
             out.append(_msg(e, "user", p["response"], root_id=root))
+            mark(root, e, _answer_line(asked.get(p["request_id"], ""), p["response"]), "human")
+            if asked.get(p["request_id"]) == "approval" and p["response"] == "reject" and root:
+                rejected.add(root)
+        elif kind == "plan.checked":
+            n = drafts[root or ""] = drafts.get(root or "", 0) + 1
+            if not p["valid"]:
+                which = {1: "first", 2: "second", 3: "third"}.get(n, f"#{n}")
+                why = _plan_errors(p["errors"])
+                mark(
+                    root,
+                    e,
+                    f"the PM's {which} draft of the plan failed checks ({why}); revising",
+                    "fail",
+                )
         elif kind == "plan.rejected":
             codes = ", ".join(sorted({err["code"] for err in p["errors"]}))
             out.append(
                 _msg(e, "activity", f"plan v{p['version']} failed checks ({codes}); revising")
+            )
+            mark(
+                root, e, f"plan v{p['version']} was rejected ({_plan_errors(p['errors'])})", "fail"
             )
         elif kind == "plan.accepted":
             # Task ids are time-ordered, so sorting them gives the order the PM wrote the plan.
@@ -355,9 +393,28 @@ def chat_messages(orch: TaskOrchestrator, runs: Runs, pid: str) -> dict[str, Any
             out.append(_msg(e, "pm", text, root_id=root, plan=steps, criteria=crit))
             if root:
                 plan_msgs[root] = out[-1]
+            mark(root, e, f"plan v{p['version']} passed the checks: {len(steps)} steps")
         elif kind == "task.status" and t:
             _track(timing.setdefault(tid, {"started": None, "ended": None}), p, e["ts"])
             line = _status_line(t, p, tid in objectives)
+            if tid in rejected and p["to"] == "FAILED":
+                line = (
+                    "You rejected the change, so nothing was merged into main. Tell me what to "
+                    "change and the team will start again."
+                )
+            if p.get("reason") == "changes requested":  # a handoff back to the agent
+                by = [tasks[v]["assignee"] for v in p.get("failed_verifiers", []) if v in tasks]
+                mark(
+                    root,
+                    e,
+                    f"{' and '.join(filter(None, by)) or 'review'} sent {t['node']} back to "
+                    f"{t['assignee']} for changes (round {p.get('round', '?')})",
+                    "back",
+                )
+            elif line:
+                failed = p["to"] == "FAILED" or "FAILED" in line or "request_changes" in line
+                label = line.removeprefix("checks: ") if t["kind"] == "gate" else line
+                mark(root, e, label, "fail" if failed else "done" if tid in objectives else "step")
             if tid not in objectives:  # a planned step: shown in its row on the plan
                 if line:
                     logs.setdefault(tid, []).append({"ts": e["ts"], "text": line})
@@ -371,8 +428,18 @@ def chat_messages(orch: TaskOrchestrator, runs: Runs, pid: str) -> dict[str, Any
                 out.append(_msg(e, role, line, root_id=root))
         elif kind == "workspace.merged_to_main":
             out.append(_msg(e, "pm", f"Merged into main ({p['detail'][:10]}).", root_id=root))
+            mark(root, e, "merged into main", "done")
         elif kind == "workspace.merge_conflict":
             out.append(_msg(e, "activity", f"merge conflict on {p['branch']}", root_id=root))
+            mark(root, e, f"merge conflict on {p['branch']}", "fail")
+        elif kind == "workspace.merge_blocked":
+            text = (
+                "Not merged: main changed since this was built, and with those changes the "
+                "tests fail. main is unchanged. Ask me to make the change again and the team "
+                "will build it on the current main."
+            )
+            out.append(_msg(e, "pm", text, root_id=root))
+            mark(root, e, "not merged: the tests fail together with the latest main", "fail")
         elif kind == "artifact.added" and t and tid not in objectives:
             logs.setdefault(tid, []).append({"ts": e["ts"], "text": f"attached {p['name']}"})
         elif kind == "artifact.added":
@@ -381,6 +448,7 @@ def chat_messages(orch: TaskOrchestrator, runs: Runs, pid: str) -> dict[str, Any
             out.append(_msg(e, "activity", f"uploaded {', '.join(p['files'])}"))
     for root, m in plan_msgs.items():
         m["steps"] = _steps(root, tasks, timing, logs, notes)
+        m["timeline"] = timeline.get(root, [])
     working: list[str] = ["the PM is writing a reply"] if pid in runs.chatting else []
     for rid in runs.running():
         for t in orch.task_tree(rid) if rid in objectives else []:
@@ -433,15 +501,56 @@ STEP_STATE = {
 }
 
 
-def _track(d: dict[str, str | None], p: dict[str, Any], ts: str) -> None:
-    """A step's clock: from its first start to when it last finished (cleared if reopened)."""
+def _track(d: dict[str, Any], p: dict[str, Any], ts: str) -> None:
+    """A step's clocks. started/ended span the whole step (cleared if reopened); busy_ms adds up
+    only the time spent RUNNING, so waits between review rounds and for a person don't count;
+    waited_ms adds up the time spent waiting on a person, which the run's total leaves out."""
     to = p["to"]
+    if p["from"] == "RUNNING" and d.get("since"):
+        d["busy_ms"] = d.get("busy_ms", 0) + _ms(ts) - _ms(d["since"])
+        d["since"] = None
+    if p["from"] == "AWAITING_HUMAN" and d.get("waiting_since"):
+        d["waited_ms"] = d.get("waited_ms", 0) + _ms(ts) - _ms(d["waiting_since"])
+        d["waiting_since"] = None
+    if to == "RUNNING":
+        d["since"] = ts
+    elif to == "AWAITING_HUMAN":
+        d["waiting_since"] = ts
     if to in ("RUNNING", "AWAITING_HUMAN") and not d["started"]:
         d["started"] = ts
     if to in ("DONE", "FAILED", "CANCELED", "WAITING"):
         d["ended"] = d["ended"] if p["from"] == "WAITING" else ts  # root: planning time only
     elif to in ("READY", "RUNNING"):
         d["ended"] = None
+
+
+def _answer_line(asked: str, response: str) -> str:
+    """The timeline's line for a person's answer, saying what they answered."""
+    if asked == "criteria" and response == "approve":
+        return "you approved the acceptance criteria"
+    if asked == "approval" and response == "approve":
+        return "you approved the change for merge"
+    if asked == "approval" and response == "reject":
+        return "you rejected the change for merge"
+    if asked == "approval" and response == "override_approve":
+        return "you approved the change for merge, overriding a failed check"
+    return f"you answered: {response.splitlines()[0][:80]}"
+
+
+def _plan_errors(errors: list[dict[str, Any]]) -> str:
+    """Why a draft plan failed, briefly: each rule broken with its first message and a count."""
+    by_code: dict[str, list[str]] = {}
+    for err in errors:
+        by_code.setdefault(err["code"], []).append(err["message"])
+    parts = [
+        f"{code}: {msgs[0]}" + (f", and {len(msgs) - 1} more like it" if len(msgs) > 1 else "")
+        for code, msgs in by_code.items()
+    ]
+    return textwrap.shorten("; ".join(parts), 220, placeholder="…")
+
+
+def _ms(ts: str) -> int:
+    return int(datetime.fromisoformat(ts).timestamp() * 1000)
 
 
 def _step_note(t: dict[str, Any], p: dict[str, Any]) -> str:
@@ -475,6 +584,10 @@ def _steps(
             "note": "",
             "started": clock.get("started"),
             "ended": clock.get("ended"),
+            "busy_ms": clock.get("busy_ms", 0),
+            "since": clock.get("since") if plan_state == "running" else None,
+            "waited_ms": clock.get("waited_ms", 0),
+            "waiting_since": clock.get("waiting_since") if plan_state == "needs_you" else None,
             "log": [],
         }
     ]
@@ -499,6 +612,10 @@ def _steps(
                 "note": note,
                 "started": c.get("started"),
                 "ended": c.get("ended") if state not in ("running", "checking") else None,
+                "busy_ms": c.get("busy_ms", 0),
+                "since": c.get("since") if state == "running" else None,
+                "waited_ms": c.get("waited_ms", 0),
+                "waiting_since": c.get("waiting_since") if state == "needs_you" else None,
                 "log": logs.get(tid, []),
             }
         )
@@ -843,9 +960,6 @@ def create_app(
             limit=min(int(q.get("limit") or 500), 2000),
         )
 
-    async def get_inbox(_: Request) -> list[dict[str, Any]]:
-        return inbox()
-
     async def answer(req: Request) -> dict[str, Any]:
         body = await req.json()
         rid = req.path_params["rid"]
@@ -995,7 +1109,6 @@ def create_app(
         Route("/api/tasks/{tid}", api(task)),
         Route("/api/tasks/{tid}/cancel", api(cancel), methods=["POST"]),
         Route("/api/events", api(events)),
-        Route("/api/inbox", api(get_inbox)),
         Route("/api/requests/{rid}/answer", api(answer), methods=["POST"]),
         Route("/api/plan-check", api(plan_check), methods=["POST"]),
         Route("/api/examples", api(examples)),

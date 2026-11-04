@@ -12,7 +12,7 @@ from starlette.testclient import TestClient
 
 from orch.core.orchestrator import TaskOrchestrator
 from orch.db.session import open_db
-from orch.web.server import RunInfo, RunOptions, create_app
+from orch.web.server import RunInfo, RunOptions, _track, create_app
 
 from .conftest import ROOT
 
@@ -73,14 +73,14 @@ def test_offline_objective_runs_through_approval_to_main(client: TestClient, tmp
         "open": True,
     }
     assert chat["open_requests"][0]["id"] == req["id"] and chat["running"] == []
-    assert [x["id"] for x in c.get("/api/inbox").json()] == [req["id"]]
+    assert c.get("/api/inbox").status_code == 404  # no inbox: decisions are answered in the chat
 
     a = c.post(f"/api/requests/{req['id']}/answer", json={"response": "approve"}).json()
     assert a["resumed"]
     ob = wait_for_run(c, r["root_id"])
     assert ob["root"]["status"] == "DONE", ob["run"]
     assert ob["run"]["report"]["merged_into_main"]
-    assert c.get("/api/inbox").json() == []
+    assert c.get(f"/api/projects/{p['id']}/chat").json()["open_requests"] == []
     chat = c.get(f"/api/projects/{p['id']}/chat").json()["messages"]
     assert not chat[-1]["text"].startswith("I had to stop")
     # the plan message is a live workflow: planning, then every planned task, all timed
@@ -88,6 +88,15 @@ def test_offline_objective_runs_through_approval_to_main(client: TestClient, tmp
     assert [s["node"] for s in steps][:3] == ["plan", "write_tests", "implement_transfer"]
     assert all(s["state"] == "done" for s in steps)
     assert all(s["started"] and s["ended"] for s in steps)
+    assert all(s["since"] is None for s in steps)
+    assert next(s for s in steps if s["node"] == "approve")["busy_ms"] == 0  # your wait
+    # ...and a timeline of everything that happened, in order
+    tl = next(m for m in chat if m.get("steps"))["timeline"]
+    assert [x["ts"] for x in tl] == sorted(x["ts"] for x in tl)
+    said = [x["text"] for x in tl]
+    assert any(t.startswith("plan v1 passed the checks") for t in said)
+    assert "orch asked you to approve the change for merge" in said
+    assert "you approved the change for merge" in said and "merged into main" in said
     gate = next(s for s in steps if s["node"] == "gates")
     assert gate["note"] == "all checks passed" and gate["log"]
     assert not any("started" in m["text"] for m in chat if m["role"] == "activity")
@@ -370,6 +379,73 @@ def test_api_key_is_saved_to_env_and_never_shown(tmp_path: Path, monkeypatch):
     assert bad.status_code == 400
     gone = c.post("/api/settings/api-key", json={"remove": True}).json()["api_key"]
     assert not gone["set"] and env.read_text() == "OTHER=1\n"
+
+
+def test_rejecting_the_change_says_what_to_do_next(client: TestClient, tmp_path: Path):
+    c = client
+    p = c.post("/api/projects", json={"name": "Rej", "starter": "minibank"}).json()
+    r = c.post(f"/api/projects/{p['id']}/objectives", json={"offline": True}).json()
+    [req] = wait_for_run(c, r["root_id"])["requests"]
+    c.post(f"/api/requests/{req['id']}/answer", json={"response": "reject"})
+    wait_for_run(c, r["root_id"])
+    chat = c.get(f"/api/projects/{p['id']}/chat").json()["messages"]
+    assert chat[-1]["text"].startswith("You rejected the change, so nothing was merged")
+    tl = next(m for m in chat if m.get("steps"))["timeline"]
+    assert "you rejected the change for merge" in [x["text"] for x in tl]
+    head = subprocess.run(
+        ["git", "log", "--oneline"], cwd=p["repo_path"], capture_output=True, text=True
+    ).stdout
+    assert "Merge obj/" not in head  # main untouched
+
+
+def test_step_time_counts_only_working_time():
+    # a gate that ran twice, two minutes apart, because a reviewer sent the code back
+    d: dict = {"started": None, "ended": None}
+    for frm, to, ts in [
+        ("READY", "RUNNING", "2026-11-04T02:43:22.000+00:00"),
+        ("RUNNING", "DONE", "2026-11-04T02:43:22.600+00:00"),
+        ("DONE", "PENDING", "2026-11-04T02:44:46.000+00:00"),
+        ("PENDING", "READY", "2026-11-04T02:45:16.000+00:00"),
+        ("READY", "RUNNING", "2026-11-04T02:45:18.000+00:00"),
+        ("RUNNING", "DONE", "2026-11-04T02:45:18.500+00:00"),
+    ]:
+        _track(d, {"from": frm, "to": to}, ts)
+    assert d["busy_ms"] == 1100 and d["since"] is None
+    assert (d["started"], d["ended"]) == (
+        "2026-11-04T02:43:22.000+00:00",
+        "2026-11-04T02:45:18.500+00:00",
+    )
+
+
+def test_time_waiting_on_a_person_is_kept_apart():
+    # the PM asks for sign-off on the criteria, the person answers 20 minutes later
+    d: dict = {"started": None, "ended": None}
+    for frm, to, ts in [
+        ("READY", "RUNNING", "2026-11-04T15:28:00.000+00:00"),
+        ("RUNNING", "AWAITING_HUMAN", "2026-11-04T15:28:40.000+00:00"),
+        ("AWAITING_HUMAN", "READY", "2026-11-04T15:48:40.000+00:00"),
+        ("READY", "RUNNING", "2026-11-04T15:48:41.000+00:00"),
+    ]:
+        _track(d, {"from": frm, "to": to}, ts)
+    assert d["waited_ms"] == 20 * 60 * 1000 and d["waiting_since"] is None
+    assert d["busy_ms"] == 40_000 and d["since"] == "2026-11-04T15:48:41.000+00:00"
+    _track(d, {"from": "RUNNING", "to": "AWAITING_HUMAN"}, "2026-11-04T15:49:00.000+00:00")
+    assert d["waiting_since"] == "2026-11-04T15:49:00.000+00:00"
+
+
+def test_timeline_says_what_a_person_answered_and_why_a_draft_failed():
+    from orch.web.server import _answer_line, _plan_errors
+
+    assert _answer_line("criteria", "approve") == "you approved the acceptance criteria"
+    assert _answer_line("approval", "reject") == "you rejected the change for merge"
+    assert _answer_line("question", "use EUR") == "you answered: use EUR"
+    errors = [
+        {"code": "COV-001", "message": f"criterion AC-{i} has no test node"} for i in (1, 2, 3)
+    ] + [{"code": "GATE-001", "message": "implement is not verified by gate(s) ruff"}]
+    assert _plan_errors(errors) == (
+        "COV-001: criterion AC-1 has no test node, and 2 more like it; "
+        "GATE-001: implement is not verified by gate(s) ruff"
+    )
 
 
 def test_choose_folder_returns_the_dialogs_pick_or_null(client: TestClient, monkeypatch):

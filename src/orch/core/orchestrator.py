@@ -1334,8 +1334,10 @@ class TaskOrchestrator:
                 gaps = self._spec_gaps(s, root.id)
                 if gaps:
                     prompt += (
-                        "\n\nReview found gaps in the agreed criteria; the work assumes:\n"
-                        + "\n".join(f"- {issue} Assumed: {assumed}" for issue, assumed in gaps)
+                        "\n\nThe criteria didn't cover these; the work does this:\n"
+                        + "\n".join(
+                            f"- {assumed} (raised in review: {issue})" for issue, assumed in gaps
+                        )
                     )
                 self._open_human(
                     s,

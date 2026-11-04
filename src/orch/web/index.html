@@ -98,6 +98,15 @@ section#view.chat-mode { padding: 0; display: flex; flex-direction: column; heig
 .wf .nm { font-family: var(--mono); font-size: 13px; } .wf .sub { flex: 1; min-width: 0; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wf .dur { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .wf .log { padding: 2px 12px 8px 36px; font-size: 12px; color: var(--muted); } .wf .log div { padding: 1px 0; }
+.wf-head .flip { border: 1px solid var(--line); background: var(--panel); border-radius: 5px; padding: 0 7px; margin-right: 8px;
+  color: var(--muted); cursor: pointer; font-size: 13px; line-height: 18px; }
+.wf-head .flip:hover { color: var(--ink); }
+.wf .tl { display: none; padding: 6px 12px 8px; font-size: 12px; }
+.wf.tl-on .tl { display: block; } .wf.tl-on details, .wf.tl-on .h-steps, .wf:not(.tl-on) .h-tl { display: none; }
+.wf .tl div { display: flex; gap: 8px; padding: 2px 0; } .wf .tl .mono { color: var(--muted); flex: none; }
+.wf .tl .k { flex: none; width: 14px; text-align: center; color: var(--muted); }
+.wf .tl .tl-back { color: var(--warn); } .wf .tl .tl-back .k { color: var(--warn); }
+.wf .tl .tl-fail .k { color: var(--bad); } .wf .tl .tl-done .k { color: var(--ok); } .wf .tl .tl-human .k { color: var(--accent); }
 .wf .st-waiting .nm, .wf .st-queued .nm, .wf .st-rerun .nm, .wf .st-canceled .nm { color: var(--muted); }
 .ic { flex: none; width: 14px; height: 14px; border-radius: 50%; display: grid; place-items: center; font-size: 10px; line-height: 1; color: #fff; font-weight: 700; box-sizing: border-box; }
 .st-done .ic { background: var(--ok); } .st-done .ic::after { content: "✓"; }
@@ -131,7 +140,6 @@ section#view.chat-mode { padding: 0; display: flex; flex-direction: column; heig
   <nav id="nav">
     <a href="#/" data-v="projects">Projects</a>
     <a href="#/events" data-v="events">Events</a>
-    <a href="#/inbox" data-v="inbox">Inbox<span class="n" id="inboxN" hidden></span></a>
     <a href="#/team" data-v="team">Team</a>
     <a href="#/plan" data-v="plan">Plan check</a>
     <a href="#/admin" data-v="admin">Admin</a>
@@ -178,8 +186,6 @@ function showDialog(html) { $("#dlgBody").innerHTML = html; dlg.showModal(); }
 
 async function refreshChrome() {
   [O, P] = await Promise.all([api("/overview"), api("/projects")]);
-  const inbox = await api("/inbox");
-  const n = $("#inboxN"); n.hidden = !inbox.length; n.textContent = inbox.length;
   $("#status").innerHTML =
     `<span class="chip ${O.api_key ? "s-true" : "s-WAITING_HUMAN"}">${O.api_key ? "API key set" : "no MODEL_API_KEY (offline only)"}</span>` +
     `<span class="chip ${O.running.length ? "s-running" : ""}">${O.running.length} running</span>`;
@@ -267,12 +273,6 @@ const views = {
         <label style="display:flex;gap:6px;align-items:center;margin:0"><input id="fFollow" type="checkbox" style="width:auto" checked> follow</label>
         <span class="muted" id="evCount"></span></div>
       <div class="card" style="padding:4px"><div class="events" id="allEvents" style="max-height:calc(100vh - 220px)"></div></div>`;
-  },
-
-  async inbox() {
-    const reqs = await api("/inbox");
-    return `<h2>Inbox</h2><p class="muted">Questions, approvals and escalations waiting on a person. Answering resumes the objective's run.</p>
-      ${reqs.length ? reqs.map(reqCard).join("") : `<p class="muted">Inbox empty.</p>`}`;
   },
 
   async team() {
@@ -399,7 +399,7 @@ function msgHtml(m, objectives) {
     acts = `<div class="acts">${req.options.map(o => `<button class="${["approve", "override_approve"].includes(o) ? "primary" : ""}" onclick="answer('${req.id}', ${esc(JSON.stringify(o))})">${esc(OPTION_LABELS[o] || o)}</button>`).join("")}</div>`;
   else if (req && req.open) acts = `<div class="acts muted" style="font-size:12px">Reply below.</div>`;
   const cls = `msg ${m.role}${req && req.open ? " ask" : ""}`;
-  const wf = m.steps ? stepsHtml(m.steps) : "";
+  const wf = m.steps ? stepsHtml(m.steps, m.timeline || [], m.root_id || "") : "";
   let html = `<div class="${cls}"><div class="who">${who}${req ? " · " + esc(req.kind) : ""}</div><div class="bubble">${esc(m.text)}${extra}</div>${wf}${acts}</div>`;
   if (m.starts_objective) {
     const o = objectives.find(x => x.id === m.root_id);
@@ -411,35 +411,59 @@ function msgHtml(m, objectives) {
 const STEP_LABEL = {done: "done", failed: "failed", running: "working", checking: "in checks and review",
   needs_you: "waiting for you", queued: "up next", rerun: "will re-run", waiting: "not started", canceled: "canceled"};
 const openSteps = new Set();
+const timelineOn = new Set();  // objectives whose workflow shows the timeline instead of the steps
+const TL_ICON = {step: "·", done: "✓", fail: "✕", back: "↩", human: "●"};
+function flipWf(btn) {
+  const wf = btn.closest(".wf"), root = wf.dataset.root;
+  wf.classList.toggle("tl-on") ? timelineOn.add(root) : timelineOn.delete(root);
+}
 
 function fmtDur(ms) {
+  if (ms > 0 && ms < 1000) return "<1s";
   const s = Math.max(0, Math.round(ms / 1000));
   if (s < 60) return `${s}s`;
   if (s < 3600) return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
   return `${Math.floor(s / 3600)}h ${Math.floor(s / 60) % 60}m`;
 }
 function durAttrs(start, end) { return start ? `data-start="${esc(start)}"${end ? ` data-end="${esc(end)}"` : ""}` : ""; }
+// a step shows only its working time (summed over review rounds); the header shows the whole run
+function busyAttrs(x) { return x.busy_ms || x.since ? `data-busy="${x.busy_ms || 0}"${x.since ? ` data-since="${esc(x.since)}"` : ""}` : ""; }
+// the run's total leaves out time spent waiting on a person, so it stops while a decision waits
+function waitAttrs(steps) {
+  const since = steps.map(x => x.waiting_since).filter(Boolean);
+  return ` data-wait="${steps.reduce((n, x) => n + (x.waited_ms || 0), 0)}"${since.length ? ` data-wait-since="${esc(since.join(","))}"` : ""}`;
+}
 function tickDurations() {
   document.querySelectorAll(".dur[data-start]").forEach(el => {
-    const end = el.dataset.end ? Date.parse(el.dataset.end) : Date.now();
-    el.textContent = fmtDur(end - Date.parse(el.dataset.start));
+    const now = Date.now(), end = el.dataset.end ? Date.parse(el.dataset.end) : now;
+    const waiting = (el.dataset.waitSince || "").split(",").filter(Boolean)
+      .reduce((n, t) => n + Math.max(0, now - Date.parse(t)), 0);
+    el.textContent = fmtDur(end - Date.parse(el.dataset.start) - Number(el.dataset.wait || 0) - waiting);
+  });
+  document.querySelectorAll(".dur[data-busy]").forEach(el => {
+    const live = el.dataset.since ? Date.now() - Date.parse(el.dataset.since) : 0;
+    el.textContent = fmtDur(Number(el.dataset.busy) + live);
   });
 }
 setInterval(tickDurations, 1000);
 
-function stepsHtml(steps) {
+function stepsHtml(steps, timeline = [], root = "") {
   const done = steps.filter(x => x.state === "done").length;
   const live = steps.some(x => ["running", "checking", "needs_you", "queued"].includes(x.state));
   const first = steps.find(x => x.started), last = steps.map(x => x.ended).filter(Boolean).sort().pop();
-  const head = `<div class="wf-head"><span>${done} of ${steps.length} steps done</span>
-    <span class="dur" ${first ? durAttrs(first.started, live ? null : last) : ""}></span></div>`;
-  return `<div class="wf">${head}${steps.map(x => {
+  const back = timeline.filter(x => x.kind === "back").length;
+  const flip = timeline.length ? `<button class="flip" onclick="flipWf(this)" title="Switch between the steps and everything that happened, in order"><span class="h-steps">▸</span><span class="h-tl">◂</span></button>` : "";
+  const head = `<div class="wf-head"><span>${flip}<span class="h-steps">${done} of ${steps.length} steps done</span>
+    <span class="h-tl">What happened, in order: ${timeline.length} events${back ? `, ${back} sent back` : ""}</span></span>
+    <span class="dur" ${first ? durAttrs(first.started, live ? null : last) + waitAttrs(steps) : ""}></span></div>`;
+  const tl = timeline.length ? `<div class="tl">${timeline.map(x => `<div class="tl-${x.kind}"><span class="mono">${esc(new Date(x.ts).toLocaleTimeString([], {hour12: false}))}</span><span class="k">${TL_ICON[x.kind] || "·"}</span><span>${esc(x.text)}</span></div>`).join("")}</div>` : "";
+  return `<div class="wf${timelineOn.has(root) ? " tl-on" : ""}" data-root="${esc(root)}">${head}${tl}${steps.map(x => {
     const sub = [x.assignee, STEP_LABEL[x.state], x.note].filter(Boolean).map(esc).join(" · ");
     const log = x.log.map(l => `<div><span class="mono">${esc(new Date(l.ts).toLocaleTimeString([], {hour12: false}))}</span> ${esc(l.text)}</div>`).join("");
     return `<details class="st-${x.state}" data-step="${x.id}" ${openSteps.has(x.id) ? "open" : ""}
       ontoggle="this.open ? openSteps.add(this.dataset.step) : openSteps.delete(this.dataset.step)">
       <summary><span class="ic"></span><span class="nm">${esc(x.node)}</span><span class="sub">${sub}</span>
-      <span class="dur" ${durAttrs(x.started, x.ended)}></span></summary>${log ? `<div class="log">${log}</div>` : ""}</details>`;
+      <span class="dur" ${busyAttrs(x)}></span></summary>${log ? `<div class="log">${log}</div>` : ""}</details>`;
   }).join("")}</div>`;
 }
 

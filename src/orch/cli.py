@@ -147,7 +147,11 @@ def run(
         help="Parallel agents cap: the most running at once (steps run together only when "
         "the plan allows)",
     ),
-    model_name: str = typer.Option("", "--model", help="Model for every agent"),
+    model_name: str = typer.Option(
+        "",
+        "--model",
+        help="Model for every agent (default muse-spark-1.3; on --resume, the one it started with)",
+    ),
     budget: float | None = typer.Option(
         None,
         min=0.01,
@@ -162,7 +166,7 @@ def run(
     """Run an objective end to end: plan, build in parallel, verify, approve, merge."""
     os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
     from orch.runtime.model import DEFAULT_MODEL, PRICES, meta_model
-    from orch.runtime.runner import Runner, last_model
+    from orch.runtime.runner import Runner, last_run
     from orch.runtime.scripted import (
         SCRIPTED_MODEL,
         TRANSFERS_CRITERIA,
@@ -171,10 +175,16 @@ def run(
     )
     from orch.runtime.workspace import GitError, Workspace
 
+    orch = _orch()
+    before = last_run(orch, resume) if resume else {}
+    if before.get("model") == SCRIPTED_MODEL and not offline:
+        offline = True  # the scripted team started it; a live model can't pick up its work
+        typer.echo("  started offline: resuming with the scripted team")
+    elif before and not offline and not model_name:
+        model_name = before["model"]  # keep the model it started with
     model_name = model_name or DEFAULT_MODEL
     if model_name not in PRICES:
         raise typer.BadParameter(f"no price for {model_name}; add it to model.PRICES")
-    orch = _orch()
     reg = TeamRegistry.load(team)
     repo = repo.resolve() if repo else None
 
@@ -188,9 +198,6 @@ def run(
             raise typer.BadParameter(f"{resume} runs in {saved}, not {repo}")
         repo = Path(saved) if saved else repo
         root = resume
-        if not offline and last_model(orch, root) == SCRIPTED_MODEL:
-            offline = True  # the scripted team started it; a live model can't pick up its work
-            typer.echo("  started offline: resuming with the scripted team")
     else:
         if offline and not objective:
             objective, ac = TRANSFERS_OBJECTIVE, [f"{k}={v}" for k, v in TRANSFERS_CRITERIA.items()]

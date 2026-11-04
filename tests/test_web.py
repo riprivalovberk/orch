@@ -227,6 +227,40 @@ def test_minibank_starter_runs_offline_even_after_the_ui_restarts(client: TestCl
     assert bad.status_code == 400 and "starter" in bad.json()["error"]
 
 
+def test_a_restarted_ui_resumes_with_the_model_and_cap_the_run_started_with(
+    client: TestClient, tmp_path: Path, monkeypatch
+):
+    from pydantic_ai.models.function import FunctionModel
+
+    from orch.runtime import model
+    from orch.runtime.scripted import TRANSFERS_CRITERIA, TRANSFERS_OBJECTIVE, scripted_team
+
+    c = client
+    assert c.get("/api/overview").json()["default_model"] == "muse-spark-1.3"
+    used: list[str] = []
+
+    def fake_meta(name: str, **_: object):  # the scripted team, under the chosen model's name
+        used.append(name)
+        team = scripted_team().function
+        assert team is not None
+        return FunctionModel(team, model_name=name)
+
+    monkeypatch.setattr(model, "meta_model", fake_meta)
+    bank = str(minibank_repo(tmp_path / "bank"))
+    p = c.post("/api/projects", json={"name": "Cap", "repo": bank}).json()
+    body = {"model": "muse-spark-1.3-contributor", "parallel": 2}
+    criteria = [f"{k}={v}" for k, v in TRANSFERS_CRITERIA.items()]
+    goal = {**body, "objective": TRANSFERS_OBJECTIVE, "criteria": criteria}
+    r = c.post(f"/api/projects/{p['id']}/objectives", json=goal).json()
+    assert r["run"]["options"] == {**body, "offline": False}
+    [req] = wait_for_run(c, r["root_id"])["requests"]
+    runs(c).runs.clear()  # the UI restarted
+    c.post(f"/api/requests/{req['id']}/answer", json={"response": "approve"})
+    ob = wait_for_run(c, r["root_id"])
+    assert ob["run"]["options"] == {**body, "offline": False}
+    assert used == [body["model"], body["model"]]  # the chosen model, both times
+
+
 def test_criteria_to_confirm_are_marked_so_the_chat_can_offer_approve(client: TestClient):
     c = client
     p = c.post("/api/projects", json={"name": "crit"}).json()

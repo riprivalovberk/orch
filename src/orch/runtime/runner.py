@@ -473,12 +473,12 @@ class Runner:
         return "\n\n".join(out)
 
 
-def last_model(orch: TaskOrchestrator, root_id: str) -> str:
-    """The model the objective's latest run used ("" if it has not run)."""
+def last_run(orch: TaskOrchestrator, root_id: str) -> dict[str, Any]:
+    """How the objective's latest run ran: {"model", "parallel"} ({} if it has not run)."""
     started = [
         e for e in orch.list_events(root_id=root_id, limit=100_000) if e["type"] == "run.started"
     ]
-    return started[-1]["payload"]["model"] if started else ""
+    return started[-1]["payload"] if started else {}
 
 
 def merge_into_main(

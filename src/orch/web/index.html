@@ -320,9 +320,9 @@ function chatHtml(p) {
             <details class="opts" style="margin-left:auto"><summary>Run settings</summary>
               <div class="grid2">
                 <div><label>Model</label><select id="oModel">${O.models.map(m => `<option ${m === O.default_model ? "selected" : ""}>${m}</option>`).join("")}</select></div>
-                <div><label title="The most agents working at once. Steps only run together when the plan allows it, so fewer may run.">Agents at once (parallel agents cap)</label><input id="oPar" type="number" min="1" value="3"></div>
-                <div><label>&nbsp;</label><label style="display:flex;gap:6px;align-items:center;color:var(--ink)">
-                  <input id="oOff" type="checkbox" style="width:auto"> Offline scripted demo (minibank projects; no chat, the message is the objective)</label></div>
+                <div><label title="The most agents working at once. Steps only run together when the plan allows it, so fewer may run.">Agents Running Parallel Cap</label><input id="oPar" type="number" min="1" value="3"></div>
+                <div><label>&nbsp;</label><label title="A scripted team instead of the model: no key, no cost. It only builds the minibank transfers change (projects started as the minibank sample), and your message just starts it." style="display:flex;gap:6px;align-items:center;color:var(--ink)">
+                  <input id="oOff" type="checkbox" style="width:auto"> Offline scripted demo</label></div>
               </div></details></div>
         </div>
       </div>

@@ -121,7 +121,7 @@ Status (Nov 2026): all six steps are built and tested offline with a scripted te
 
 1. Target app source ships in `examples/minibank/`; `orch minibank` makes a fresh repo of it to work on.
 2. Parallel work from the start (worktree per task, PAR-001).
-3. Every agent uses the cheapest model, `muse-spark-1.3-contributor` (already the default).
+3. Every agent uses one model, `muse-spark-1.3` by default (`muse-spark-1.3-contributor` is cheaper, but Meta may train on its prompts).
 4. The policy gate checks that every changed file is inside the task's planned paths and
    the agent's write_paths, and that no secrets (keys, passwords) were added.
 

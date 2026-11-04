@@ -79,13 +79,19 @@ class Runs:
     def start(self, root_id: str, options: RunOptions | None = None) -> RunInfo:
         os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
         from orch.runtime.model import DEFAULT_MODEL, PRICES, meta_model
-        from orch.runtime.runner import Runner, last_model
+        from orch.runtime.runner import Runner, last_run
         from orch.runtime.scripted import SCRIPTED_MODEL, scripted_team
         from orch.runtime.workspace import Workspace
 
         prev = self.runs.get(root_id)
-        if options is None and prev is None:  # e.g. the UI restarted since it last ran
-            options = RunOptions(offline=last_model(self.orch, root_id) == SCRIPTED_MODEL)
+        if options is None and prev is None and (before := last_run(self.orch, root_id)):
+            # The UI restarted since it last ran: carry on as it started.
+            offline = before["model"] == SCRIPTED_MODEL
+            options = RunOptions(
+                model="" if offline else before["model"],
+                parallel=before.get("parallel", 3),
+                offline=offline,
+            )
         opts = options or (prev.options if prev else RunOptions())
         opts.model = opts.model or DEFAULT_MODEL
         if opts.model not in PRICES:

@@ -141,7 +141,12 @@ def run(
         None,
         help="Target git repo with a main branch (on --resume, the objective's own repo)",
     ),
-    parallel: int = typer.Option(3, min=1, help="Agents running at once"),
+    parallel: int = typer.Option(
+        3,
+        min=1,
+        help="Parallel agents cap: the most running at once (steps run together only when "
+        "the plan allows)",
+    ),
     model_name: str = typer.Option("", "--model", help="Model for every agent"),
     budget: float | None = typer.Option(
         None,

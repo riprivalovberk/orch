@@ -15,6 +15,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import traceback
 from dataclasses import asdict, dataclass, field
@@ -150,6 +151,47 @@ def check_repo_path(repo: Path) -> None:
             f"can't create {repo}: {parent} is not writable. Give a full path such as "
             "~/code/my-service, or leave the repo empty to make one under the data folder"
         )
+
+
+FOLDER_PROMPT = "Choose the target repo folder"
+
+# The OS's own folder dialog, run as a child process so it never touches the server's threads.
+_MAC_PICK = [
+    "osascript",
+    "-e", "activate",  # bring the dialog in front of the browser
+    "-e", f'POSIX path of (choose folder with prompt "{FOLDER_PROMPT}")',
+]  # fmt: skip
+_WIN_PICK = [
+    "powershell", "-NoProfile", "-STA", "-Command",
+    "[Console]::OutputEncoding = [Text.Encoding]::UTF8;"
+    "Add-Type -AssemblyName System.Windows.Forms;"
+    "$d = New-Object System.Windows.Forms.FolderBrowserDialog;"
+    f"$d.Description = '{FOLDER_PROMPT}';"
+    "$top = New-Object System.Windows.Forms.Form -Property @{TopMost = $true};"
+    "if ($d.ShowDialog($top) -eq 'OK') { $d.SelectedPath }",
+]  # fmt: skip
+_picking = threading.Lock()  # one dialog at a time, even from several tabs
+
+
+def pick_folder() -> str | None:
+    """Open Finder's / Explorer's folder dialog on this machine; the chosen path, or None if
+    the user cancelled. Works because the UI server runs on the user's own machine."""
+    if sys.platform == "darwin":
+        cmd = _MAC_PICK
+    elif sys.platform == "win32":
+        cmd = _WIN_PICK
+    else:
+        raise ApiError("the folder dialog works on macOS and Windows; type the path instead")
+    if not _picking.acquire(blocking=False):
+        raise ApiError("a folder dialog is already open", 409)
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    except subprocess.TimeoutExpired:
+        return None
+    finally:
+        _picking.release()
+    path = p.stdout.strip()  # cancelling exits non-zero (macOS) or prints nothing (Windows)
+    return str(Path(path)) if p.returncode == 0 and path else None
 
 
 STARTERS = ("empty", "minibank")
@@ -595,6 +637,9 @@ def create_app(
         orch.register_team(pid, team())
         return project_view(pid)
 
+    async def choose_folder(_: Request) -> dict[str, Any]:
+        return {"path": await asyncio.to_thread(pick_folder)}
+
     async def project(req: Request) -> dict[str, Any]:
         return project_view(req.path_params["pid"])
 
@@ -948,6 +993,7 @@ def create_app(
         Route("/api/overview", api(overview)),
         Route("/api/projects", api(projects)),
         Route("/api/projects", api(create_project), methods=["POST"]),
+        Route("/api/choose-folder", api(choose_folder), methods=["POST"]),
         Route("/api/projects/{pid}", api(project)),
         Route("/api/projects/{pid}/budget", api(set_budget), methods=["POST"]),
         Route("/api/projects/{pid}/verify", api(verify)),

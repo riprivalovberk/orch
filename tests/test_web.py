@@ -370,3 +370,63 @@ def test_api_key_is_saved_to_env_and_never_shown(tmp_path: Path, monkeypatch):
     assert bad.status_code == 400
     gone = c.post("/api/settings/api-key", json={"remove": True}).json()["api_key"]
     assert not gone["set"] and env.read_text() == "OTHER=1\n"
+
+
+def test_choose_folder_returns_the_dialogs_pick_or_null(client: TestClient, monkeypatch):
+    from orch.web import server
+
+    seen = []
+
+    def fake_run(cmd, **_):
+        seen.append(cmd[0])
+        out = "/Users/me/code/svc/\n" if len(seen) == 1 else ""
+        return subprocess.CompletedProcess(cmd, 0 if out else 1, out, "User canceled.")
+
+    monkeypatch.setattr(server.sys, "platform", "darwin")
+    monkeypatch.setattr(server.subprocess, "run", fake_run)
+    assert client.post("/api/choose-folder").json() == {"path": "/Users/me/code/svc"}
+    assert client.post("/api/choose-folder").json() == {"path": None}  # cancelled
+    assert seen == ["osascript", "osascript"]
+
+    monkeypatch.setattr(server.sys, "platform", "win32")
+    client.post("/api/choose-folder")
+    assert seen[-1] == "powershell"
+
+    monkeypatch.setattr(server.sys, "platform", "linux")
+    assert client.post("/api/choose-folder").status_code == 400
+
+
+def test_only_one_folder_dialog_opens_at_a_time(client: TestClient, monkeypatch):
+    import threading
+
+    from orch.web import server
+
+    opened, close = threading.Event(), threading.Event()
+
+    def slow_dialog(cmd, **_):
+        opened.set()
+        close.wait(10)
+        return subprocess.CompletedProcess(cmd, 0, "/picked\n", "")
+
+    monkeypatch.setattr(server.sys, "platform", "darwin")
+    monkeypatch.setattr(server.subprocess, "run", slow_dialog)
+    first: dict = {}
+    t = threading.Thread(target=lambda: first.update(client.post("/api/choose-folder").json()))
+    t.start()
+    assert opened.wait(10)
+    second = client.post("/api/choose-folder")
+    assert second.status_code == 409  # the first dialog is still open
+    close.set()
+    t.join(10)
+    assert first == {"path": "/picked"}
+    assert client.post("/api/choose-folder").status_code == 200  # free again
+
+
+def test_project_uses_the_picked_folder_or_the_default(client: TestClient, tmp_path: Path):
+    picked = tmp_path / "picked" / "svc"
+    p = client.post("/api/projects", json={"name": "Svc", "repo": str(picked)}).json()
+    assert p["repo_path"] == str(picked.resolve())
+    assert (picked / ".git").exists()
+
+    d = client.post("/api/projects", json={"name": "Dflt", "repo": ""}).json()
+    assert d["repo_path"] == str((tmp_path / "repos" / "dflt").resolve())

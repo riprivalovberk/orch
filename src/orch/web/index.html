@@ -208,7 +208,9 @@ const views = {
       Leave the repo empty to make a new folder in <span class="mono">${esc(O.data_dir)}/repos/&lt;name&gt;</span>.</p>
       <div class="card" style="max-width:640px">
         <label>Name</label><input id="pName" placeholder="payments-api">
-        <label>Target repo path (optional): an existing git repo, or a new folder</label><input id="pRepo" placeholder="~/code/my-service — leave empty for a new repo under the data folder">
+        <label>Target repo folder (optional): an existing git repo, or a new or empty folder</label>
+        <div class="row" style="flex-wrap:nowrap"><input id="pRepo" placeholder="~/code/my-service — leave empty for a new repo under the data folder">
+          <button id="pBrowse" onclick="pickFolder()" style="white-space:nowrap">Browse…</button></div>
         <label>A new repo starts as</label><select id="pStarter">
           <option value="empty" selected>Empty Python project (pyproject, README, tests/)</option>
           <option value="minibank">minibank sample bank app (needed for the offline demo)</option></select>
@@ -560,6 +562,16 @@ async function pollEvents(boxId, query, reset) {
 }
 
 // ------------------------------------------------------------------ actions
+
+// Opens Finder / Explorer on this machine (the server runs here, so it can).
+async function pickFolder() {
+  const btn = $("#pBrowse");
+  if (btn.disabled) return;
+  btn.disabled = true;  // until the dialog closes, so a double click opens just one
+  try { const r = await api("/choose-folder", {}); if (r.path) $("#pRepo").value = r.path; }
+  catch (e) { toast("Error: " + e.message, 8000); }
+  finally { btn.disabled = false; }
+}
 
 async function createProject() {
   const r = await act(() => api("/projects", {name: $("#pName").value, repo: $("#pRepo").value, starter: $("#pStarter").value, budget: $("#pBudget").value}), "Project created");

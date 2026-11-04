@@ -1127,6 +1127,9 @@ class TaskOrchestrator:
                         "round": g.round,
                         "gate": g.gate,
                         "passed": g.passed,
+                        "duration_ms": g.duration_ms,
+                        # pins the exact gate output this record stands for
+                        "output_sha256": hashlib.sha256(g.output.encode()).hexdigest(),
                     }
                     for g in gates
                 ],

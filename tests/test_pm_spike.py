@@ -46,4 +46,6 @@ def test_validate_then_submit(tmp_path: Path):
 def test_cost_counts_cached_input_at_the_cached_price():
     u = RunUsage(input_tokens=1_000_000, cache_read_tokens=400_000, output_tokens=100_000)
     assert round(cost_usd(u, "muse-spark-1.3"), 4) == round(0.6 * 1.25 + 0.4 * 0.15 + 0.1 * 4.25, 4)
-    assert round(cost_usd(u), 4) == round(0.6 * 0.10 + 0.4 * 0.002 + 0.1 * 0.20, 4)
+    contributor = cost_usd(u, "muse-spark-1.3-contributor")
+    assert round(contributor, 4) == round(0.6 * 0.10 + 0.4 * 0.002 + 0.1 * 0.20, 4)
+    assert cost_usd(u) == cost_usd(u, "muse-spark-1.3")  # standard is the default

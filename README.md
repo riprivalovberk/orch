@@ -51,8 +51,10 @@ uv run orch evidence <objective>       # audit pack: plans, gates, reviews, appr
 use, minibank (a tiny bank service with a protected `payments/` package), is its own repo
 next to orch, not part of it; `--offline` only works on a copy of it.
 Each repo gets one project whose budget covers all its objectives: $2.00 to start,
-changed with `--budget`. Every agent uses `muse-spark-1.3-contributor` unless `--model`
-says otherwise. Workers can hand in non-code files (test reports, notes) with
+changed with `--budget`. Every agent uses standard `muse-spark-1.3` unless `--model`
+says otherwise. `muse-spark-1.3-contributor` costs about a tenth as much, but Meta may train
+on its prompts and outputs (your code), so it is opt-in and only for sample code; orch warns
+when you pick it. Workers can hand in non-code files (test reports, notes) with
 `submit_artifact`; they are stored by hash under `.orch/artifacts/` and listed in the evidence.
 
 Everything orch creates (databases, spike results, agent transcripts) goes in one folder,

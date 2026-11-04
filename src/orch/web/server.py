@@ -685,7 +685,7 @@ def create_app(
         return FileResponse(INDEX, headers={"cache-control": "no-cache"})
 
     async def overview(_: Request) -> dict[str, Any]:
-        from orch.runtime.model import DEFAULT_MODEL, PRICES
+        from orch.runtime.model import DATA_WARNING, DEFAULT_MODEL, PRICES, TRAINS_ON_DATA
 
         reg = team()
         return {
@@ -693,6 +693,8 @@ def create_app(
             "team": {"path": str(team_path), "pm": reg.pm, "agents": reg.describe()},
             "models": list(PRICES),
             "default_model": DEFAULT_MODEL,
+            "trains_on_data": sorted(TRAINS_ON_DATA),
+            "data_warning": DATA_WARNING,
             "api_key": key_status(env)["set"],
             "default_budget": default_budget,
             "running": runs.running(),

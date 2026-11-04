@@ -24,8 +24,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import yaml
-from pydantic import ValidationError
 from starlette.applications import Starlette
 from starlette.datastructures import UploadFile
 from starlette.requests import Request
@@ -33,9 +31,8 @@ from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route
 
 from orch.core.orchestrator import OrchestratorError, TaskOrchestrator
-from orch.core.plan import PlanValidator, ValidationContext
 from orch.core.team import TeamRegistry
-from orch.domain.schemas import Plan, ProjectLimits
+from orch.domain.schemas import ProjectLimits
 from orch.ids import now_iso
 from orch.paths import data_dir
 
@@ -72,7 +69,6 @@ class Runs:
 
     orch: TaskOrchestrator
     team_path: Path
-    template: Path
     runs: dict[str, RunInfo] = field(default_factory=dict)
     lock: threading.Lock = field(default_factory=threading.Lock)
     chatting: set[str] = field(default_factory=set)  # projects whose PM is writing a reply
@@ -95,9 +91,7 @@ class Runs:
         project = self.orch.get_project(self.orch.get_task(root_id)["project_id"])
         model = scripted_team() if opts.offline else _live_model(meta_model, opts.model)
         team = TeamRegistry.load(self.team_path)
-        ws = Workspace.create(
-            Path(project["repo_path"]), data_dir() / "worktrees", template=self.template
-        )
+        ws = Workspace.create(Path(project["repo_path"]), data_dir() / "worktrees")
         with self.lock:
             if root_id in self.running():
                 raise ApiError(f"{root_id} is already running", 409)
@@ -132,7 +126,7 @@ def _live_model(meta_model: Any, name: str) -> Any:
 
 def check_repo_path(repo: Path) -> None:
     """A target repo is an existing git repo's top folder, or a new or empty folder that gets
-    the template. Never copy the template into a folder that already has other files."""
+    an empty Python project. Never write into a folder that already has other files."""
     from orch.runtime.workspace import git
 
     if (repo / ".git").exists():
@@ -193,9 +187,6 @@ def pick_folder() -> str | None:
         _picking.release()
     path = p.stdout.strip()  # cancelling exits non-zero (macOS) or prints nothing (Windows)
     return str(Path(path)) if p.returncode == 0 and path else None
-
-
-STARTERS = ("empty", "minibank")
 
 
 def write_empty_repo(repo: Path, name: str) -> None:
@@ -660,7 +651,6 @@ def create_app(
     orch: TaskOrchestrator,
     *,
     team_path: Path,
-    template: Path,
     default_budget: float = 2.0,
     env_file: Path | None = None,
     chat_model: Any = None,  # model name -> Model for the PM chat; tests pass a scripted one
@@ -668,7 +658,7 @@ def create_app(
     from orch.cli import _criteria, evidence_markdown
 
     env = (env_file or Path(".env")).resolve()  # where ModelEnv reads the key from
-    runs = Runs(orch, team_path, template)
+    runs = Runs(orch, team_path)
 
     def team() -> TeamRegistry:
         return TeamRegistry.load(team_path)
@@ -723,14 +713,11 @@ def create_app(
         budget = float(body.get("budget") or default_budget)
         if orch.project_for_repo(str(repo)):
             raise ApiError(f"{repo} already has a project; pick another repo path", 409)
-        starter = body.get("starter") or "empty"
-        if starter not in STARTERS:
-            raise ApiError(f"starter must be one of {list(STARTERS)}")
         check_repo_path(repo)
         try:
-            if starter == "empty" and not (repo / ".git").exists():
+            if not (repo / ".git").exists():
                 write_empty_repo(repo, name)
-            Workspace.create(repo, data_dir() / "worktrees", template=template)
+            Workspace.create(repo, data_dir() / "worktrees")
         except (GitError, OSError) as e:
             raise ApiError(f"could not set up a repo at {repo}: {e}") from e
         pid = orch.create_project(
@@ -824,8 +811,8 @@ def create_app(
         repo_path = orch.get_project(pid)["repo_path"]
         if opts.offline and not (Path(repo_path or "") / "minibank").is_dir():
             raise ApiError(
-                "the offline scripted team only builds the minibank transfers demo; "
-                "make a project from the minibank sample to try it"
+                "the offline scripted team only builds its transfers demo, which needs a "
+                "minibank repo; make a project whose repo folder is a copy of minibank"
             )
         if opts.offline and not objective:
             objective, criteria = (
@@ -859,6 +846,9 @@ def create_app(
         text = (body.get("text") or "").strip()
         if not text:
             raise ApiError("say something")
+        decisions = [r for r in orch.open_human_requests(pid) if r["options"]]
+        if len(decisions) == 1 and (said := short_decision(text, decisions[0]["options"])):
+            return answer_request(decisions[0]["id"], said)
         opts = run_options(body)
         if opts.offline:  # the scripted team has no chat: the message is the objective
             return await create_objective_from(pid, {**body, "objective": text})
@@ -960,17 +950,21 @@ def create_app(
             limit=min(int(q.get("limit") or 500), 2000),
         )
 
-    async def answer(req: Request) -> dict[str, Any]:
-        body = await req.json()
-        rid = req.path_params["rid"]
-        status = orch.resolve_human(rid, str(body["response"]))
+    def answer_request(rid: str, response: str, resume: bool = True) -> dict[str, Any]:
+        status = orch.resolve_human(rid, response)
         out: dict[str, Any] = {"status": status, "resumed": False}
-        if body.get("resume", True):
+        if resume:
             root = _root_of_request(orch, rid)
             if root and root not in runs.running():
                 runs.start(root)
                 out["resumed"] = True
         return out
+
+    async def answer(req: Request) -> dict[str, Any]:
+        body = await req.json()
+        return answer_request(
+            req.path_params["rid"], str(body["response"]), bool(body.get("resume", True))
+        )
 
     async def task(req: Request) -> dict[str, Any]:
         from orch.runtime.workspace import GitError, Workspace
@@ -995,28 +989,6 @@ def create_app(
         body = await req.json() if await req.body() else {}
         reason = body.get("reason") or "canceled from the web UI"
         return {"status": orch.cancel(req.path_params["tid"], reason)}
-
-    async def plan_check(req: Request) -> dict[str, Any]:
-        body = await req.json()
-        try:
-            spec = Plan.model_validate(yaml.safe_load(body["plan"]))
-        except (yaml.YAMLError, ValidationError) as e:
-            raise ApiError(f"not a plan: {e}") from e
-        ctx = ValidationContext.from_team(team())
-        errors = PlanValidator.for_pack(body.get("pack") or "fintech_sdlc").validate(spec, ctx)
-        return {
-            "ok": not errors,
-            "nodes": len(spec.nodes),
-            "edges": len(spec.edges),
-            "errors": [
-                {"text": str(e), "code": e.code, "hint": e.hint, "escalate": e.escalate}
-                for e in errors
-            ],
-        }
-
-    async def examples(_: Request) -> dict[str, str]:
-        ex = template.parent
-        return {p.name: p.read_text() for p in sorted(ex.glob("plan_*.yaml"))}
 
     async def nuke(req: Request) -> dict[str, Any]:
         """Spike results or target repos. The db stays: this process holds it open."""
@@ -1110,8 +1082,6 @@ def create_app(
         Route("/api/tasks/{tid}/cancel", api(cancel), methods=["POST"]),
         Route("/api/events", api(events)),
         Route("/api/requests/{rid}/answer", api(answer), methods=["POST"]),
-        Route("/api/plan-check", api(plan_check), methods=["POST"]),
-        Route("/api/examples", api(examples)),
         Route("/api/nuke", api(nuke), methods=["POST"]),
         Route("/api/settings", api(get_settings)),
         Route("/api/settings/api-key", api(set_api_key), methods=["POST"]),
@@ -1119,6 +1089,27 @@ def create_app(
     app = Starlette(routes=routes)
     app.state.runs = runs
     return app
+
+
+# A short chat reply to an open Approve / Reject decision is that decision, as if clicked.
+_SAID = {
+    "approve": re.compile(
+        r"(?:(?:ok(?:ay)?|yes|yep|sure)\W*)?(?:i\s+)?"
+        r"(?:approved?(?:\s+it)?|lgtm|merge(?:\s+it)?|ship\s+it|go\s+ahead|yes|ok(?:ay)?)"
+    ),
+    "reject": re.compile(
+        r"(?:no\W*)?(?:i\s+)?(?:reject(?:ed)?(?:\s+it)?|don'?t\s+merge(?:\s+it)?|no)"
+    ),
+}
+
+
+def short_decision(text: str, options: list[str]) -> str | None:
+    """'ok approve' -> 'approve' when the request offers it; None for anything longer."""
+    said = re.sub(r"[\s.!]+$", "", text.strip().lower())
+    for option, pattern in _SAID.items():
+        if option in options and pattern.fullmatch(said):
+            return option
+    return None
 
 
 def _root_of_request(orch: TaskOrchestrator, request_id: str) -> str | None:

@@ -26,8 +26,7 @@ from orch.runtime import gates, scripted
 from orch.runtime.runner import Runner, merge_into_main
 from orch.runtime.workspace import Workspace, git
 
-ROOT = Path(__file__).resolve().parents[1]
-TEMPLATE = ROOT / "examples" / "minibank"
+from .conftest import minibank_repo
 
 
 def run(coro):
@@ -36,7 +35,7 @@ def run(coro):
 
 @pytest.fixture
 def ws(tmp_path: Path) -> Workspace:
-    return Workspace.create(tmp_path / "repo", tmp_path / "wt", template=TEMPLATE)
+    return Workspace.create(minibank_repo(tmp_path / "repo"), tmp_path / "wt")
 
 
 def start(orch: TaskOrchestrator, team: TeamRegistry) -> str:
@@ -301,7 +300,8 @@ def test_failing_gate_sends_work_back(orch: TaskOrchestrator, team: TeamRegistry
 def test_cli_offline_run_approve_resume_evidence(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("ORCH_DATA_DIR", str(tmp_path / "data"))
     cli = CliRunner()
-    r = cli.invoke(app, ["run", "--offline", "--no-interactive"])
+    repo = str(minibank_repo(tmp_path / "bank"))
+    r = cli.invoke(app, ["run", "--offline", "--no-interactive", "--repo", repo])
     assert r.exit_code == 0, r.output
     assert "waiting on hum_" in r.output
     inbox = cli.invoke(app, ["inbox"]).output
@@ -469,7 +469,8 @@ def test_submit_artifact_stores_by_hash_and_shows_in_evidence(
 def test_cli_resume_uses_the_objectives_repo_and_budget_updates(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("ORCH_DATA_DIR", str(tmp_path / "data"))
     cli = CliRunner()
-    repo = tmp_path / "bank"
+    assert "give --repo" in cli.invoke(app, ["run", "--offline"]).output
+    repo = minibank_repo(tmp_path / "bank")
     r = cli.invoke(app, ["run", "--offline", "--no-interactive", "--repo", str(repo)])
     assert r.exit_code == 0 and "budget $2.00" in r.output, r.output
     inbox = cli.invoke(app, ["inbox"]).output

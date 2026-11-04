@@ -139,9 +139,7 @@ section#view.chat-mode { padding: 0; display: flex; flex-direction: column; heig
   <h1>orch</h1>
   <nav id="nav">
     <a href="#/" data-v="projects">Projects</a>
-    <a href="#/events" data-v="events">Events</a>
     <a href="#/team" data-v="team">Team</a>
-    <a href="#/plan" data-v="plan">Plan check</a>
     <a href="#/admin" data-v="admin">Admin</a>
   </nav>
   <div id="status"></div>
@@ -211,15 +209,13 @@ const views = {
 
   async new() {
     return `<h2>New project</h2><p class="muted">A project is one target git repo, the agent team and a shared budget.
-      Leave the repo empty to make a new folder in <span class="mono">${esc(O.data_dir)}/repos/&lt;name&gt;</span>.</p>
+      Leave the repo empty to make a new folder in <span class="mono">${esc(O.data_dir)}/repos/&lt;name&gt;</span>;
+      a new or empty folder starts as an empty Python project (pyproject, README, tests/).</p>
       <div class="card" style="max-width:640px">
         <label>Name</label><input id="pName" placeholder="payments-api">
         <label>Target repo folder (optional): an existing git repo, or a new or empty folder</label>
         <div class="row" style="flex-wrap:nowrap"><input id="pRepo" placeholder="~/code/my-service — leave empty for a new repo under the data folder">
           <button id="pBrowse" onclick="pickFolder()" style="white-space:nowrap">Browse…</button></div>
-        <label>A new repo starts as</label><select id="pStarter">
-          <option value="empty" selected>Empty Python project (pyproject, README, tests/)</option>
-          <option value="minibank">minibank sample bank app (needed for the offline demo)</option></select>
         <label>Budget (USD, shared by all objectives)</label><input id="pBudget" type="number" step="0.5" value="${O.default_budget}">
         <div class="row" style="margin-top:12px"><button class="primary" onclick="createProject()">Create project</button></div>
       </div>`;
@@ -265,30 +261,11 @@ const views = {
       <h3>Events</h3><div class="card" style="padding:4px"><div class="events" id="objEvents"></div></div>`;
   },
 
-  async events(q) {
-    const params = new URLSearchParams(q || "");
-    return `<h2>Events</h2><div class="card row">
-        <select id="fProject" style="width:auto"><option value="">all projects</option>${P.map(p => `<option value="${p.id}" ${params.get("project") === p.id ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select>
-        <input id="fText" placeholder="filter: type, actor, node, text…" style="max-width:320px" value="${esc(params.get("q") || "")}">
-        <label style="display:flex;gap:6px;align-items:center;margin:0"><input id="fFollow" type="checkbox" style="width:auto" checked> follow</label>
-        <span class="muted" id="evCount"></span></div>
-      <div class="card" style="padding:4px"><div class="events" id="allEvents" style="max-height:calc(100vh - 220px)"></div></div>`;
-  },
-
   async team() {
     return `<h2>Team</h2><p class="muted mono">${esc(O.team.path)} · PM: ${esc(O.team.pm)}</p>
       ${O.team.agents.map(a => `<div class="card"><strong>${esc(a.name)}</strong> ${a.name === O.team.pm ? st("PM") : ""}
         <div>${a.capabilities.map(c => `<span class="chip">${esc(c)}</span>`).join(" ")}</div>
         <div class="muted" style="margin-top:6px">${esc(a.description)}</div></div>`).join("")}`;
-  },
-
-  async plan() {
-    const ex = await api("/examples");
-    return `<h2>Plan check</h2><p class="muted">Validate a plan (YAML or JSON) against the structural rules and the fintech_sdlc policy pack.</p>
-      <div class="card"><div class="row">Load example: ${Object.keys(ex).map(n => `<button onclick='$("#planText").value = ${esc(JSON.stringify(ex[n]))}'>${esc(n)}</button>`).join("")}</div>
-      <textarea id="planText" rows="18" style="margin-top:10px"></textarea>
-      <div class="row" style="margin-top:10px"><button class="primary" onclick="checkPlan()">Check plan</button></div>
-      <div id="planOut"></div></div>`;
   },
 
   async admin() {
@@ -342,7 +319,7 @@ function chatHtml(p) {
                 <div><label>Model</label><select id="oModel">${O.models.map(m => `<option ${m === O.default_model ? "selected" : ""}>${m}</option>`).join("")}</select></div>
                 <div><label>Agents at once</label><input id="oPar" type="number" min="1" value="3"></div>
                 <div><label>&nbsp;</label><label style="display:flex;gap:6px;align-items:center;color:var(--ink)">
-                  <input id="oOff" type="checkbox" style="width:auto"> Offline scripted demo (minibank projects; no chat, the message is the objective)</label></div>
+                  <input id="oOff" type="checkbox" style="width:auto"> Offline scripted demo (no chat, the message is the objective)</label></div>
               </div></details></div>
         </div>
       </div>
@@ -362,8 +339,7 @@ function detailsHtml(p) {
   return `<a href="#/project/${pid}" class="muted">← back to the chat</a>
     <div class="row" style="justify-content:space-between;margin-top:6px">
       <div><h2>${esc(p.name)}: project details</h2><div class="muted mono">${esc(p.id)} · ${esc(p.repo_path)} · ${esc(p.policy_pack)}</div></div>
-      <div class="row"><button onclick="verifyChain('${pid}')">Verify event chain</button>
-      <a class="btn" href="#/events?project=${pid}" style="text-decoration:none">Events</a></div></div>
+      <div class="row"><button onclick="verifyChain('${pid}')">Verify event chain</button></div></div>
     <div class="card row" style="margin-top:14px">
       <span>Spent <strong id="spent">${money(p.spent_usd)}</strong> of <strong>$${p.budget_usd.toFixed(2)}</strong></span>
       <input id="budget" type="number" step="0.5" style="width:110px" value="${p.budget_usd}">
@@ -502,7 +478,7 @@ async function loadChat(pid) {
   if (!q) askInstead = false;
   chatMode = q && !askInstead ? {kind: "answer", id: q.id, text: "Your message answers the PM's question above."}
     : {kind: "chat", text: askInstead ? "Your message is a new question for the PM, not an answer."
-        : open.length ? "A decision is waiting above. You can still ask the PM anything."
+        : open.length ? "A decision is waiting above: click it, or reply \"approve\" or \"reject\". You can still ask the PM anything."
         : data.running.length ? "The team is working. Ask the PM anything; you'll be asked here when they need you."
         : "Ask the PM about the project, or tell it what to build."};
   $("#mode").innerHTML = esc(chatMode.text) + (q ? ` <a href="#" onclick="askInstead = !askInstead; loadChat('${pid}'); return false">${
@@ -598,14 +574,14 @@ async function pickFolder() {
 }
 
 async function createProject() {
-  const r = await act(() => api("/projects", {name: $("#pName").value, repo: $("#pRepo").value, starter: $("#pStarter").value, budget: $("#pBudget").value}), "Project created");
+  const r = await act(() => api("/projects", {name: $("#pName").value, repo: $("#pRepo").value, budget: $("#pBudget").value}), "Project created");
   if (r) go(`#/project/${r.id}`);
 }
 async function loadFiles(pid) {
   const box = $("#fileList"); if (!box || $("#filesPanel")?.hidden) return;
   try {
     const files = await api(`/projects/${pid}/files`);
-    const starter = f => /^(minibank|tests)\//.test(f.path) || ["README.md", "pyproject.toml", ".gitignore"].includes(f.path);
+    const starter = f => /^tests\/|\.(py|toml|md|cfg|ini|lock)$/.test(f.path) || f.path === ".gitignore";
     const size = b => b == null ? "" : b < 1024 ? b + " B" : (b / 1024).toFixed(1) + " KB";
     const row = f => `<div class="f" onclick="previewFile('${pid}', ${esc(JSON.stringify(f.path))})" title="Preview">
       <span style="min-width:0">${esc(f.path.split("/").pop())}${f.path.includes("/") ? `<div class="muted" style="font-size:11px">${esc(f.path.split("/").slice(0, -1).join("/"))}/</div>` : ""}</span>
@@ -673,13 +649,6 @@ async function showTask(tid) {
       ${t.diff ? `<h3>Diff</h3><pre class="box">${esc(t.diff)}</pre>` : ""}`);
   } catch (e) { toast("Error: " + e.message); }
 }
-async function checkPlan() {
-  try { const r = await api("/plan-check", {plan: $("#planText").value});
-    $("#planOut").innerHTML = r.ok ? `<p class="s-DONE">Plan cleared: ${r.nodes} nodes, ${r.edges} edges</p>`
-      : `<p class="s-FAILED">Plan rejected: ${r.errors.length} error(s)</p>` + r.errors.map(e =>
-        `<div class="mono">${esc(e.text)}${e.escalate ? ` <span class="s-WAITING_HUMAN">[needs a human]</span>` : ""}${e.hint ? `<div class="muted">  hint: ${esc(e.hint)}</div>` : ""}</div>`).join("");
-  } catch (e) { $("#planOut").innerHTML = `<p class="err">${esc(e.message)}</p>`; }
-}
 async function saveKey() {
   const key = $("#apiKey").value.trim();
   if (!key) return toast("Paste the key first");
@@ -711,21 +680,7 @@ async function render() {
   const typing = document.activeElement && ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName);
   try {
     await refreshChrome();
-    if (name === "events") {
-      if (fresh) {
-        $("#view").innerHTML = await views.events(query);
-        const reload = () => { const p = $("#fProject").value; history.replaceState(null, "", `#/events${p ? "?project=" + p : ""}`); lastRoute = location.hash; pollEvents("allEvents", p ? "project=" + p : "", true); };
-        $("#fProject").onchange = reload;
-        $("#fText").oninput = () => { const box = $("#allEvents"); const f = $("#fText").value.toLowerCase();
-          const shown = f ? evRows.filter(e => JSON.stringify(e).toLowerCase().includes(f)) : evRows;
-          box.innerHTML = shown.map(evRow).join(""); $("#evCount").textContent = `${shown.length} of ${evRows.length}`; };
-        await pollEvents("allEvents", new URLSearchParams(query || "").get("project") ? "project=" + new URLSearchParams(query).get("project") : "", true);
-      } else {
-        await pollEvents("allEvents", $("#fProject").value ? "project=" + $("#fProject").value : "", false);
-      }
-      return;
-    }
-    if (!fresh && !isChat && (typing || ["new", "plan", "admin", "team"].includes(name))) return;
+    if (!fresh && !isChat && (typing || ["", "new", "admin", "team"].includes(name))) return;
     if (!fresh && isChat) return loadChat(arg);  // keep the composer; refresh the thread
     if (!fresh && name === "project") {  // details: keep the budget field; refresh the list
       const p = P.find(x => x.id === arg);

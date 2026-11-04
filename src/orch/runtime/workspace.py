@@ -50,7 +50,7 @@ class Workspace:
         """Open a target repo, making it from a template folder (git init + commit) if new."""
         if not (repo / ".git").exists():
             if template is None:
-                raise GitError(f"{repo} is not a git repo and no template was given")
+                raise GitError(f"{repo} is not a git repo; run git init there and commit to main")
             shutil.copytree(template, repo, dirs_exist_ok=True, ignore=_ignore)
             git(repo, "init", "-q", "-b", "main")
             git(repo, "add", "-A")

@@ -26,6 +26,8 @@ from orch.runtime.model import DEFAULT_MODEL, ModelEnv, meta_model
 from orch.runtime.runner import Runner, RunReport
 from orch.runtime.workspace import Workspace
 
+from .conftest import minibank_repo
+
 pytestmark = [
     pytest.mark.live,
     pytest.mark.skipif(
@@ -34,8 +36,6 @@ pytestmark = [
     ),
 ]
 
-ROOT = Path(__file__).resolve().parents[1]
-TEMPLATE = ROOT / "examples" / "minibank"
 BUDGET = 0.50
 
 PAYMENTS_OBJECTIVE = (
@@ -61,7 +61,7 @@ SECURITY_REVIEWER = AgentConfig(
 
 @pytest.fixture
 def ws(tmp_path: Path) -> Workspace:
-    return Workspace.create(tmp_path / "repo", tmp_path / "wt", template=TEMPLATE)
+    return Workspace.create(minibank_repo(tmp_path / "repo"), tmp_path / "wt")
 
 
 def live_run(

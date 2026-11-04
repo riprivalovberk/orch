@@ -92,7 +92,7 @@ def test_offline_objective_runs_through_approval_to_main(client: TestClient, tmp
     assert [x["ts"] for x in tl] == sorted(x["ts"] for x in tl)
     said = [x["text"] for x in tl]
     assert any(t.startswith("plan v1 passed the checks") for t in said)
-    assert "orch asked you to approve the change for merge" in said
+    assert "FinOrch asked you to approve the change for merge" in said
     assert "you approved the change for merge" in said and "merged into main" in said
     gate = next(s for s in steps if s["node"] == "gates")
     assert gate["note"] == "all checks passed" and gate["log"]

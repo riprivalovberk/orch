@@ -1,4 +1,4 @@
-"""Where orch keeps everything it creates: one folder, safe to delete at any time.
+"""Where FinOrch keeps everything it creates: one folder, safe to delete at any time.
 
 Databases, spike results and transcripts all live under ``data_dir()``. Default ``.orch/``
 in the current directory (gitignored); override with ORCH_DATA_DIR. Wipe it with ``orch nuke``.

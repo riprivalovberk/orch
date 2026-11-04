@@ -353,7 +353,7 @@ def ui(
     from orch.web.server import create_app
 
     web = create_app(_orch(), team_path=team.resolve(), default_budget=DEFAULT_BUDGET)
-    typer.secho(f"orch ui on http://{host}:{port}  (data in {data_dir()})", bold=True)
+    typer.secho(f"FinOrch UI on http://{host}:{port}  (data in {data_dir()})", bold=True)
     uvicorn.run(web, host=host, port=port, log_level="warning")
 
 
@@ -367,7 +367,7 @@ def nuke(
     ),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation"),
 ) -> None:
-    """Delete what orch has created: everything, or one section of the data folder."""
+    """Delete what FinOrch has created: everything, or one section of the data folder."""
     if section not in NUKE_SECTIONS:
         raise typer.BadParameter(f"pick one of {list(NUKE_SECTIONS)}")
     d = data_dir()

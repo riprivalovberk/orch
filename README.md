@@ -1,4 +1,4 @@
-# orch (working name)
+# FinOrch
 
 **Your agents write their own workflow. We check it like a compiler before anything runs.**
 
@@ -49,13 +49,13 @@ uv run orch evidence <objective>       # audit pack: plans, gates, reviews, appr
 `--repo` is the target git repo (it needs a `main` branch); approved changes merge into its
 `main`, and `--resume` always continues in the objective's own repo. The sample app the demos
 use, minibank (a tiny bank service with a protected `payments/` package), is its own repo
-next to orch, not part of it; `--offline` only works on a copy of it.
+next to FinOrch, not part of it; `--offline` only works on a copy of it.
 Each repo gets one project whose budget covers all its objectives: $2.00 to start,
 changed with `--budget`. Every agent uses `muse-spark-1.3-contributor` unless `--model`
 says otherwise. Workers can hand in non-code files (test reports, notes) with
 `submit_artifact`; they are stored by hash under `.orch/artifacts/` and listed in the evidence.
 
-Everything orch creates (databases, spike results, agent transcripts) goes in one folder,
+Everything FinOrch creates (databases, spike results, agent transcripts) goes in one folder,
 `.orch/` (gitignored; override with `ORCH_DATA_DIR`). Delete it any time with `uv run orch nuke` (or one part: `orch nuke db`, `orch nuke spike`,
 `orch nuke repos`).
 
@@ -93,7 +93,7 @@ src/orch/
   mcp/           the agent MCP server (run-token identity, tool allow-lists) + worker tools
   runtime/       runner, git workspace, gates, Meta Model API wiring, PM tools, spike,
                  scripted team (--offline)
-  web/           the web UI (orch ui): Starlette JSON API + one HTML page
+  web/           the web UI (`orch ui`): Starlette JSON API + one HTML page
   paths.py       the one data folder (.orch/)
 teams/           the agent team (YAML)
 examples/        sample plans (Plan check) and sample data
